@@ -134,6 +134,29 @@ class CalendarFlowTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(event["title"], "🤝 💜 Vantacrow: Silent Hill pt 3")
         self.assertIn("Collab with: Dubstep", event["description"])
 
+    async def test_edit_image_entry_moves_calendar_event(self):
+        image = self.db.create_entry(self.streamer.id, START, "Day 6", "image", orig_tz="EDT")
+        await self.bot.pick(image)
+        later = START + timedelta(days=1)
+
+        async def no_card(entry, streamer):
+            pass
+        self.bot.refresh_card = no_card
+        await self.bot.edit_entry(image.id, later, "FIRST STAGE FABLES | DAY 6", "EDT")
+        fixed = self.db.get_entry(image.id)
+        self.assertEqual((fixed.start_utc, fixed.previous_start, fixed.title), (later, START,
+                                                                               "FIRST STAGE FABLES | DAY 6"))
+        self.assertEqual(self.bot.calendar.events[fixed.gcal_event_id]["start"], later)
+
+    async def test_delete_entry_removes_calendar_event(self):
+        image = self.db.create_entry(self.streamer.id, START, "Day 6", "image", orig_tz="EDT")
+        await self.bot.pick(image)
+        self.assertIsNone(await self.bot.delete_entry(image.id))
+        self.assertEqual(self.bot.calendar.events, {})
+        gone = self.db.get_entry(image.id)
+        self.assertEqual((gone.status, gone.picked), ("discarded", False))
+        self.assertNotIn(gone.id, [e.id for e in self.db.entries_for_streamer(self.streamer.id)])
+
     async def test_event_title(self):
         self.assertEqual(event_title("Kuga Leo", "DEVOUR"), "💜 Kuga Leo: DEVOUR")
         self.assertEqual(event_title("Kuga Leo", "DEVOUR", is_collab=True), "🤝 💜 Kuga Leo: DEVOUR")

@@ -47,7 +47,9 @@ CREATE TABLE IF NOT EXISTS entries (
     post_id         TEXT,
     video_id        TEXT UNIQUE,
     confidence      REAL,
-    status          TEXT NOT NULL DEFAULT 'confirmed',  -- pending_review | confirmed | cancelled
+    status          TEXT NOT NULL DEFAULT 'confirmed',  -- pending_review | confirmed | cancelled | discarded
+    orig_tz         TEXT,                   -- timezone an image entry's time was written in
+    review_message_id INTEGER,
     previous_start  TEXT,
     card_channel_id INTEGER,
     card_message_id INTEGER,
@@ -75,6 +77,8 @@ CREATE TABLE IF NOT EXISTS alerts (
 MIGRATIONS = [
     ("streamers", "bootstrapped", "INTEGER NOT NULL DEFAULT 0"),
     ("picks", "calendar_id", "TEXT"),
+    ("entries", "orig_tz", "TEXT"),
+    ("entries", "review_message_id", "INTEGER"),
 ]
 
 PAUSED_FOREVER = "forever"
@@ -119,6 +123,9 @@ class Entry:
     partners: list = None
     calendar_id: Optional[str] = None
     gcal_event_id: Optional[str] = None
+    orig_tz: Optional[str] = None
+    confidence: Optional[float] = None
+    review_message_id: Optional[int] = None
 
 
 def _now() -> datetime:
@@ -143,12 +150,15 @@ class Database:
             existing = {r["name"] for r in self.conn.execute(f"PRAGMA table_info({table})")}
             if column not in existing:
                 self.conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+        # YouTube channel names can carry stray whitespace (e.g. a trailing space).
+        self.conn.execute("UPDATE streamers SET name = trim(name) WHERE name != trim(name)")
         self.conn.commit()
 
     # --- streamers (F-1, F-2) ---
 
     def add_streamer(self, channel_id: str, handle: Optional[str], name: str, home_tz: str) -> tuple[Streamer, bool]:
         """Insert or reactivate a streamer. Returns (streamer, created)."""
+        name = name.strip()
         existing = self.get_streamer_by_channel(channel_id)
         if existing and existing.active:
             return existing, False
@@ -174,15 +184,21 @@ class Database:
         return _to_streamer(row) if row else None
 
     def find_active_streamer(self, query: str) -> Optional[Streamer]:
-        """Match /unfollow input against name, @handle or channel ID (case-insensitive)."""
-        q = query.strip().lstrip("@").lower()
+        """Match command input against channel ID, name or @handle (case- and whitespace-insensitive).
+
+        Autocomplete lists send the channel ID, so odd characters in display names can't break a match."""
+        q = " ".join(query.split()).lstrip("@").lower()
         for s in self.list_streamers():
-            if q in (s.name.lower(), (s.handle or "").lstrip("@").lower(), s.channel_id.lower()):
+            if q in (s.channel_id.lower(), " ".join(s.name.split()).lower(), (s.handle or "").lstrip("@").lower()):
                 return s
         return None
 
     def deactivate_streamer(self, streamer_id: int) -> None:
         self.conn.execute("UPDATE streamers SET active = 0 WHERE id = ?", (streamer_id,))
+        self.conn.commit()
+
+    def set_home_tz(self, streamer_id: int, home_tz: str) -> None:
+        self.conn.execute("UPDATE streamers SET home_tz = ? WHERE id = ?", (home_tz, streamer_id))
         self.conn.commit()
 
     def mark_bootstrapped(self, streamer_id: int) -> None:
@@ -236,12 +252,14 @@ class Database:
     # --- entries and picks ---
 
     def create_entry(self, streamer_id: int, start_utc: datetime, title: str, source: str,
-                     video_id: Optional[str] = None, is_collab: bool = False, partners: list = ()) -> Entry:
+                     video_id: Optional[str] = None, is_collab: bool = False, partners: list = (),
+                     status: str = "confirmed", orig_tz: Optional[str] = None, confidence: Optional[float] = None,
+                     post_id: Optional[str] = None) -> Entry:
         cur = self.conn.execute(
-            "INSERT INTO entries (streamer_id, start_utc, title, source, video_id, is_collab, partners_json, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO entries (streamer_id, start_utc, title, source, video_id, is_collab, partners_json, status, "
+            "orig_tz, confidence, post_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (streamer_id, start_utc.isoformat(), title, source, video_id, int(is_collab), json.dumps(list(partners)),
-             _now().isoformat()),
+             status, orig_tz, confidence, post_id, _now().isoformat()),
         )
         self.conn.commit()
         return self.get_entry(cur.lastrowid)
@@ -263,13 +281,31 @@ class Database:
         if "is_collab" in fields:
             fields["is_collab"] = int(fields["is_collab"])
         allowed = {"start_utc", "title", "status", "previous_start", "card_channel_id", "card_message_id",
-                   "is_collab", "partners_json"}
+                   "is_collab", "partners_json", "video_id", "source", "orig_tz", "review_message_id"}
         assert set(fields) <= allowed, set(fields) - allowed
         values = [v.isoformat() if isinstance(v, datetime) else v for v in fields.values()]
         assignments = ", ".join(f"{k} = ?" for k in fields)
         self.conn.execute(f"UPDATE entries SET {assignments} WHERE id = ?", (*values, entry_id))
         self.conn.commit()
         return self.get_entry(entry_id)
+
+    def entries_for_streamer(self, streamer_id: int, statuses=("confirmed",), unlinked_only: bool = False
+                             ) -> list[Entry]:
+        """Entries to match a new schedule image or waiting room against (I-4)."""
+        marks = ",".join("?" * len(statuses))
+        sql = f"SELECT id FROM entries WHERE streamer_id = ? AND status IN ({marks})"
+        if unlinked_only:
+            sql += " AND video_id IS NULL"
+        rows = self.conn.execute(sql, (streamer_id, *statuses)).fetchall()
+        return [self.get_entry(r["id"]) for r in rows]
+
+    def picked_unlinked_entries(self, start_from: datetime, start_to: datetime) -> list[Entry]:
+        """L-2b: picked image-only streams starting in a window, to watch their /live page."""
+        rows = self.conn.execute(
+            "SELECT e.id FROM entries e JOIN picks p ON p.entry_id = e.id JOIN streamers s ON s.id = e.streamer_id "
+            "WHERE s.active = 1 AND e.status = 'confirmed' AND e.video_id IS NULL AND e.start_utc BETWEEN ? AND ?",
+            (start_from.isoformat(), start_to.isoformat())).fetchall()
+        return [self.get_entry(r["id"]) for r in rows]
 
     def set_picked(self, entry_id: int, picked: bool) -> None:
         if picked:
@@ -362,4 +398,5 @@ def _to_entry(row: sqlite3.Row) -> Entry:
     return Entry(row["id"], row["streamer_id"], _dt(row["start_utc"]), row["title"], row["source"], row["video_id"],
                  row["status"], _dt(row["previous_start"]), row["card_channel_id"], row["card_message_id"],
                  bool(row["picked"]), bool(row["is_collab"]), json.loads(row["partners_json"] or "[]"),
-                 row["calendar_id"], row["gcal_event_id"])
+                 row["calendar_id"], row["gcal_event_id"], row["orig_tz"], row["confidence"],
+                 row["review_message_id"])

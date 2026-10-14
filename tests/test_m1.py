@@ -92,6 +92,22 @@ class DatabaseTest(unittest.TestCase):
         self.assertEqual(again.id, s.id)
         self.assertEqual(again.home_tz, "Europe/London")
 
+    def test_names_with_stray_spaces_still_match(self):
+        s, _ = self.db.add_streamer("UCrosco", "@roscograves", "Rosco Graves【FIRST STAGE PRODUCTION EN】 ", "UTC")
+        self.assertEqual(s.name, "Rosco Graves【FIRST STAGE PRODUCTION EN】")
+        self.assertEqual(self.db.find_active_streamer("UCrosco").id, s.id)       # what autocomplete sends
+        self.assertEqual(self.db.find_active_streamer("rosco graves【first stage production en】  ").id, s.id)
+        self.db.conn.execute("UPDATE streamers SET name = name || '  ' WHERE id = ?", (s.id,))
+        self.db.conn.commit()
+        self.db.conn.close()
+        self.db = Database(self.path)  # restart cleans up names saved before the fix
+        self.assertEqual(self.db.get_streamer(s.id).name, "Rosco Graves【FIRST STAGE PRODUCTION EN】")
+
+    def test_set_home_tz(self):
+        s, _ = self.db.add_streamer("UC9", "@claudeclawmark", "Claude Clawmark", "America/Los_Angeles")
+        self.db.set_home_tz(s.id, "Asia/Tokyo")
+        self.assertEqual(self.db.find_active_streamer("@claudeclawmark").home_tz, "Asia/Tokyo")
+
     def test_pause_forever_and_resume(self):
         self.assertFalse(self.db.is_paused())
         self.db.pause(None)

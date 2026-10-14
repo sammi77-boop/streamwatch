@@ -30,6 +30,7 @@ class Config:
     db_path: str
     google_key_path: Path
     google_calendar_id: Optional[str]
+    anthropic_api_key: Optional[str] = None
 
 
 def load_config() -> Config:
@@ -48,4 +49,6 @@ def load_config() -> Config:
         google_key_path=Path(os.environ.get("GOOGLE_KEY_PATH", str(ROOT / "google_service_account.json"))),
         # C-4: the one calendar stream events go to, shared with the robot account.
         google_calendar_id=os.environ.get("GOOGLE_CALENDAR_ID") or None,
+        # M4: schedule image reading. Without it, /drop explains how to turn it on.
+        anthropic_api_key=os.environ.get("ANTHROPIC_API_KEY") or None,
     )

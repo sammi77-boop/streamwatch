@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Optional
@@ -123,3 +124,29 @@ async def resolve_handle_names(session: aiohttp.ClientSession, api_key: str, han
         if info:
             names[handle.lower()] = info.title
     return names
+
+
+# --- M4: /live page watch for picked streams that never got a waiting room (L-2b) ---
+
+BROWSER_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) "
+                  "Chrome/129.0 Safari/537.36",
+    "Accept-Language": "en-US,en;q=0.9",
+}
+_CANONICAL_RE = re.compile(r'<link rel="canonical" href="https://www\.youtube\.com/watch\?v=([\w-]{11})"')
+
+
+def parse_live_page(html: str) -> Optional[str]:
+    """Video ID if the channel is live right now. "isLive" also appears on waiting rooms; only isLiveNow counts."""
+    match = _CANONICAL_RE.search(html)
+    if match and '"isLiveNow":true' in html:
+        return match.group(1)
+    return None
+
+
+async def fetch_live_video_id(session: aiohttp.ClientSession, channel_id: str) -> Optional[str]:
+    url = f"https://www.youtube.com/channel/{channel_id}/live"
+    async with session.get(url, headers=BROWSER_HEADERS, timeout=aiohttp.ClientTimeout(total=20)) as resp:
+        if resp.status != 200:
+            raise YouTubeError(f"/live page HTTP {resp.status} for {channel_id}")
+        return parse_live_page(await resp.text())

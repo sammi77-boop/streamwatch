@@ -9,6 +9,7 @@ from typing import Optional, Union
 
 from .collab import detect_collab
 from .db import Database, Entry, Streamer
+from .schedule import best_match
 from .youtube import VideoInfo
 
 FREE_CHAT_RE = re.compile(r"free\s*-?\s*chat|フリーチャット|フリチャ", re.IGNORECASE)
@@ -88,9 +89,24 @@ def apply_update(db: Database, streamer: Streamer, video_id: str, info: Optional
         is_collab, partners = detect_collab(info.title, info.description, streamer.handle)
         details = {"title": info.title, "is_collab": is_collab, "partners": partners}
         if entry is None:
-            entry = db.create_entry(streamer.id, info.scheduled_start, info.title, "waiting_room", video_id,
-                                    is_collab, partners)
-            events.append(NewWaitingRoom(entry))
+            image_entry = best_match(info.scheduled_start, info.title,
+                                     db.entries_for_streamer(streamer.id, unlinked_only=True))
+            if image_entry is not None:
+                # I-4: the stream from the schedule image now has a waiting room; its exact time and title win.
+                old = image_entry.start_utc
+                entry = db.update_entry(image_entry.id, video_id=video_id, source="both",
+                                        start_utc=info.scheduled_start, title=info.title,
+                                        is_collab=is_collab or image_entry.is_collab,
+                                        partners=partners or image_entry.partners)
+                if abs(old - info.scheduled_start) > RESCHEDULE_TOLERANCE:
+                    entry = db.update_entry(entry.id, previous_start=old)
+                    events.append(Rescheduled(entry, old))
+                else:
+                    events.append(Updated(entry))
+            else:
+                entry = db.create_entry(streamer.id, info.scheduled_start, info.title, "waiting_room", video_id,
+                                        is_collab, partners)
+                events.append(NewWaitingRoom(entry))
         elif entry.status == "cancelled":
             entry = db.update_entry(entry.id, status="confirmed", start_utc=info.scheduled_start, **details)
             events.append(NewWaitingRoom(entry))
@@ -102,6 +118,12 @@ def apply_update(db: Database, streamer: Streamer, video_id: str, info: Optional
             events.append(Updated(db.update_entry(entry.id, **details)))
 
     elif info.broadcast == "live":
+        if entry is None:
+            # L-2a: a stream from a schedule image that never had a waiting room.
+            started = info.actual_start or now
+            entry = best_match(started, info.title, db.entries_for_streamer(streamer.id, unlinked_only=True))
+            if entry is not None:
+                entry = db.update_entry(entry.id, video_id=video_id, source="both")
         if entry is not None:
             if entry.picked and db.record_alert(video_id, "picked"):
                 events.append(WentLive(entry, info))
