@@ -224,7 +224,8 @@ class StreamWatch(discord.Client):
         now = datetime.now(timezone.utc)
 
         async def read(model, imgs, name, tz, pdate, ptext):
-            return await reader.read_schedule(self.claude, model, imgs, name, tz, pdate, ptext)
+            return await reader.read_schedule(self.claude, model, imgs, name, tz, pdate, ptext,
+                                              notes=streamer.reading_notes)
 
         # Keep one picture of the whole schedule (parts stitched together) to show on its cards.
         self.config.images_dir.mkdir(parents=True, exist_ok=True)
@@ -563,6 +564,25 @@ def register_commands(bot: StreamWatch) -> None:
         return [app_commands.Choice(name=s.name[:100], value=s.channel_id)
                 for s in bot.db.list_streamers() if current in s.name.lower()][:25]
 
+    @tree.command(description="Tell the bot how to read a streamer's schedule images (leave note empty to clear)")
+    @app_commands.describe(name="Streamer", note="e.g. 'Two times like 6 PM | 9 PM are start and end of one stream'")
+    async def reading_note(interaction: discord.Interaction, name: str, note: Optional[str] = None) -> None:
+        streamer = bot.db.find_active_streamer(name)
+        if not streamer:
+            await interaction.response.send_message(f"Not following anyone called `{name}`.", ephemeral=True)
+            return
+        bot.db.set_reading_notes(streamer.id, note)
+        if note:
+            await interaction.response.send_message(f"📝 Reading note for **{streamer.name}**:\n> {note}")
+        else:
+            await interaction.response.send_message(f"📝 Cleared the reading note for **{streamer.name}**.")
+
+    @reading_note.autocomplete("name")
+    async def reading_note_autocomplete(interaction: discord.Interaction, current: str):
+        current = current.lower()
+        return [app_commands.Choice(name=s.name[:100], value=s.channel_id)
+                for s in bot.db.list_streamers() if current in s.name.lower()][:25]
+
     @tree.command(name="list", description="Show followed streamers and whether the bot is paused")
     async def list_cmd(interaction: discord.Interaction) -> None:
         streamers = bot.db.list_streamers()
@@ -570,7 +590,8 @@ def register_commands(bot: StreamWatch) -> None:
                               color=discord.Color.purple())
         if streamers:
             embed.description = "\n".join(
-                f"• **{s.name}** · {s.handle or s.channel_id} · `{s.home_tz}`" for s in streamers)
+                f"• **{s.name}** · {s.handle or s.channel_id} · `{s.home_tz}`" + (" · 📝" if s.reading_notes else "")
+                for s in streamers)
         else:
             embed.description = "Nobody yet. Add one with `/follow`."
         embed.add_field(name="Status", value=pause_status(bot.db), inline=False)

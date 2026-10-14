@@ -75,12 +75,15 @@ Return one entry per scheduled stream. Rules:
 - confidence below 0.8 when text is blurry, stylised, partly hidden, or you had to guess the date or time."""
 
 
-def _prompt(streamer: str, home_tz: str, post_date: datetime, post_text: str, image_count: int) -> str:
+def _prompt(streamer: str, home_tz: str, post_date: datetime, post_text: str, image_count: int,
+            notes: Optional[str] = None) -> str:
     what = ("this schedule image" if image_count == 1 else
             f"these {image_count} images, which are parts of ONE schedule (read them together, in order)")
+    owner_notes = (f"\nThe owner's notes on reading this streamer's schedules (these override the general rules):\n"
+                   f"{notes.strip()}\n" if notes and notes.strip() else "")
     return (f"Streamer: {streamer} (usually streams in {home_tz})\n"
             f"Posted: {post_date:%A %Y-%m-%d}\n"
-            f"Post text: {post_text.strip() or '(none)'}\n\n"
+            f"Post text: {post_text.strip() or '(none)'}\n{owner_notes}\n"
             f"Read every stream in {what}.")
 
 
@@ -89,8 +92,8 @@ class RefusedError(Exception):
 
 
 async def read_schedule(client: anthropic.AsyncAnthropic, model: str, images: list[tuple[bytes, str]],
-                        streamer: str, home_tz: str, post_date: datetime, post_text: str = ""
-                        ) -> tuple[bool, list[ReadEntry]]:
+                        streamer: str, home_tz: str, post_date: datetime, post_text: str = "",
+                        notes: Optional[str] = None) -> tuple[bool, list[ReadEntry]]:
     """Read one schedule that may be split over several images [(bytes, media_type)]. Returns (is_schedule, entries)."""
     image_blocks = [{"type": "image", "source": {"type": "base64", "media_type": media_type,
                                                  "data": base64.standard_b64encode(data).decode()}}
@@ -101,7 +104,7 @@ async def read_schedule(client: anthropic.AsyncAnthropic, model: str, images: li
         system=SYSTEM,
         messages=[{"role": "user", "content": [
             *image_blocks,
-            {"type": "text", "text": _prompt(streamer, home_tz, post_date, post_text, len(images))},
+            {"type": "text", "text": _prompt(streamer, home_tz, post_date, post_text, len(images), notes)},
         ]}],
         output_format=_Reading,
         output_config={"effort": "high" if model == SECOND_OPINION else "medium"},

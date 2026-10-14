@@ -103,6 +103,13 @@ class DatabaseTest(unittest.TestCase):
         self.db = Database(self.path)  # restart cleans up names saved before the fix
         self.assertEqual(self.db.get_streamer(s.id).name, "Rosco Graves【FIRST STAGE PRODUCTION EN】")
 
+    def test_reading_notes(self):
+        s, _ = self.db.add_streamer("UCr", "@roscograves", "Rosco", "America/New_York")
+        self.db.set_reading_notes(s.id, "A | B is start and end")
+        self.assertEqual(self.db.get_streamer(s.id).reading_notes, "A | B is start and end")
+        self.db.set_reading_notes(s.id, "")
+        self.assertIsNone(self.db.get_streamer(s.id).reading_notes)
+
     def test_set_home_tz(self):
         s, _ = self.db.add_streamer("UC9", "@claudeclawmark", "Claude Clawmark", "America/Los_Angeles")
         self.db.set_home_tz(s.id, "Asia/Tokyo")

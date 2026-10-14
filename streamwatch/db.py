@@ -17,7 +17,8 @@ CREATE TABLE IF NOT EXISTS streamers (
     home_tz      TEXT NOT NULL,
     active       INTEGER NOT NULL DEFAULT 1,
     created_at   TEXT NOT NULL,
-    bootstrapped INTEGER NOT NULL DEFAULT 0
+    bootstrapped INTEGER NOT NULL DEFAULT 0,
+    reading_notes TEXT                  -- how to read this streamer's schedule images, passed to Claude
 );
 CREATE TABLE IF NOT EXISTS settings (
     key   TEXT PRIMARY KEY,
@@ -81,6 +82,7 @@ MIGRATIONS = [
     ("entries", "orig_tz", "TEXT"),
     ("entries", "review_message_id", "INTEGER"),
     ("entries", "image_path", "TEXT"),
+    ("streamers", "reading_notes", "TEXT"),
 ]
 
 PAUSED_FOREVER = "forever"
@@ -95,6 +97,7 @@ class Streamer:
     home_tz: str
     active: bool
     bootstrapped: bool = False
+    reading_notes: Optional[str] = None
 
 
 @dataclass
@@ -202,6 +205,10 @@ class Database:
 
     def set_home_tz(self, streamer_id: int, home_tz: str) -> None:
         self.conn.execute("UPDATE streamers SET home_tz = ? WHERE id = ?", (home_tz, streamer_id))
+        self.conn.commit()
+
+    def set_reading_notes(self, streamer_id: int, notes: Optional[str]) -> None:
+        self.conn.execute("UPDATE streamers SET reading_notes = ? WHERE id = ?", (notes or None, streamer_id))
         self.conn.commit()
 
     def mark_bootstrapped(self, streamer_id: int) -> None:
@@ -389,7 +396,7 @@ class Database:
 
 def _to_streamer(row: sqlite3.Row) -> Streamer:
     return Streamer(row["id"], row["channel_id"], row["handle"], row["name"], row["home_tz"], bool(row["active"]),
-                    bool(row["bootstrapped"]))
+                    bool(row["bootstrapped"]), row["reading_notes"])
 
 
 def _to_video(row: sqlite3.Row) -> Video:
