@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Optional
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -27,6 +28,8 @@ class Config:
     youtube_api_key: str
     default_tz: str
     db_path: str
+    google_key_path: Path
+    google_calendar_id: Optional[str]
 
 
 def load_config() -> Config:
@@ -41,4 +44,8 @@ def load_config() -> Config:
         youtube_api_key=os.environ["YOUTUBE_API_KEY"],
         default_tz=os.environ.get("DEFAULT_STREAMER_TZ", "America/Los_Angeles"),
         db_path=os.environ.get("DB_PATH", str(ROOT / "streamwatch.db")),
+        # Service account key; the bot's robot account (decision 10).
+        google_key_path=Path(os.environ.get("GOOGLE_KEY_PATH", str(ROOT / "google_service_account.json"))),
+        # C-4: the one calendar stream events go to, shared with the robot account.
+        google_calendar_id=os.environ.get("GOOGLE_CALENDAR_ID") or None,
     )

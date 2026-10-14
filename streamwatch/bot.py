@@ -17,6 +17,7 @@ from discord.ext import tasks
 
 from .config import Config, load_config
 from .db import PAUSED_FOREVER, Database, Entry, Streamer
+from .gcal import CalendarAuthError, CalendarError, GoogleCalendar, event_description, event_title
 from .parsing import CHANNEL_URL_EXAMPLE, parse_channel_url, parse_duration, suggest_timezones, valid_timezone
 from .tracker import Cancelled, Event, NewWaitingRoom, Rescheduled, SurpriseLive, WentLive, apply_update
 from .ui import CHANNELS, PickButton, UnpickButton, card_embed, card_view, change_notice, live_alert
@@ -59,9 +60,12 @@ class StreamWatch(discord.Client):
         self.channels_lock = asyncio.Lock()
         self.poll_count = 0
         self.youtube_ok = True
+        self.calendar_ok = True
+        self.calendar: Optional[GoogleCalendar] = None
 
     async def setup_hook(self) -> None:
         self.http_session = aiohttp.ClientSession()
+        self.calendar = GoogleCalendar(self.http_session, self.config.google_key_path, self.config.google_calendar_id)
         self.add_dynamic_items(PickButton, UnpickButton)
         register_commands(self)
         # Guild-scoped sync makes commands appear instantly in the private server.
@@ -183,7 +187,8 @@ class StreamWatch(discord.Client):
             if message:
                 self.db.update_entry(event.entry.id, card_channel_id=message.channel.id, card_message_id=message.id)
         elif isinstance(event, (Rescheduled, Cancelled)):
-            await self.refresh_card(event.entry, streamer)
+            await self.sync_calendar_change(event.entry)
+            await self.refresh_card(self.db.get_entry(event.entry.id), streamer)
             if event.entry.picked:
                 old = event.old_start if isinstance(event, Rescheduled) else None
                 await self.send("weekly-schedule", content=change_notice(event.entry, streamer, old))
@@ -191,6 +196,63 @@ class StreamWatch(discord.Client):
             await self.send("go-live", **live_alert(streamer, event.video, self.config.owner_id, surprise=False))
         elif isinstance(event, SurpriseLive):
             await self.send("surprise-live", **live_alert(streamer, event.video, self.config.owner_id, surprise=True))
+
+    # --- M3: Google Calendar (C-1 to C-4) ---
+
+    async def _calendar_failed(self, error: CalendarError) -> str:
+        log.warning("Calendar call failed: %s", error)
+        if isinstance(error, CalendarAuthError):
+            message = (f"Google Calendar access stopped working ({error}). Check the service account key "
+                       "in Google Cloud and google_service_account.json on the server.")
+        else:
+            message = f"Google Calendar error: {error}"
+        if self.calendar_ok:
+            self.calendar_ok = False
+            await self.send("bot-health", content=f"⚠️ {message}")
+        return message
+
+    async def pick(self, entry: Entry) -> Optional[str]:
+        """Pick a stream and add its calendar event. Returns a problem message, or None."""
+        self.db.set_picked(entry.id, True)
+        if entry.gcal_event_id:
+            return None
+        if not self.calendar.connected:
+            return "Picked for go-live alerts. Google Calendar isn't connected yet, so no event was added."
+        streamer = self.db.get_streamer(entry.streamer_id)
+        calendar_id = self.calendar.calendar_id
+        try:
+            event_id = await self.calendar.create_event(calendar_id, event_title(streamer.name, entry.title),
+                                                        entry.start_utc, event_description(entry.video_id))
+        except CalendarError as e:
+            return "⚠️ Picked for go-live alerts, but couldn't add it to your calendar. " + await self._calendar_failed(e)
+        self.db.set_calendar_event(entry.id, calendar_id, event_id)
+        self.calendar_ok = True
+        return None
+
+    async def unpick(self, entry: Entry) -> Optional[str]:
+        problem = None
+        if entry.gcal_event_id:
+            try:
+                await self.calendar.delete_event(entry.calendar_id, entry.gcal_event_id)
+            except CalendarError as e:
+                problem = "⚠️ Removed the pick, but couldn't delete the calendar event. " + await self._calendar_failed(e)
+        self.db.set_picked(entry.id, False)
+        return problem
+
+    async def sync_calendar_change(self, entry: Entry) -> None:
+        """C-3: move or delete the calendar event when a picked stream changes."""
+        if not entry.gcal_event_id:
+            return
+        streamer = self.db.get_streamer(entry.streamer_id)
+        try:
+            if entry.status == "cancelled":
+                await self.calendar.delete_event(entry.calendar_id, entry.gcal_event_id)
+                self.db.set_calendar_event(entry.id, None, None)
+            else:
+                await self.calendar.move_event(entry.calendar_id, entry.gcal_event_id, entry.start_utc,
+                                               event_title(streamer.name, entry.title))
+        except CalendarError as e:
+            await self._calendar_failed(e)
 
     async def refresh_card(self, entry: Entry, streamer: Streamer) -> None:
         if not (entry.card_channel_id and entry.card_message_id):
@@ -293,6 +355,8 @@ def register_commands(bot: StreamWatch) -> None:
         else:
             embed.description = "Nobody yet. Add one with `/follow`."
         embed.add_field(name="Status", value=pause_status(bot.db), inline=False)
+        calendar = (f"📅 `{bot.calendar.calendar_id}`" if bot.calendar.connected else "Not connected yet")
+        embed.add_field(name="Calendar", value=calendar, inline=False)
         await interaction.response.send_message(embed=embed)
 
     @tree.command(description="Pause all checks, digests and alerts")

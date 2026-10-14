@@ -55,6 +55,7 @@ CREATE TABLE IF NOT EXISTS entries (
 CREATE TABLE IF NOT EXISTS picks (
     entry_id      INTEGER PRIMARY KEY REFERENCES entries(id),
     gcal_event_id TEXT,
+    calendar_id   TEXT,
     picked_at     TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS alerts (
@@ -67,6 +68,7 @@ CREATE TABLE IF NOT EXISTS alerts (
 # Columns added after a table first shipped: (table, column, definition).
 MIGRATIONS = [
     ("streamers", "bootstrapped", "INTEGER NOT NULL DEFAULT 0"),
+    ("picks", "calendar_id", "TEXT"),
 ]
 
 PAUSED_FOREVER = "forever"
@@ -107,6 +109,8 @@ class Entry:
     card_channel_id: Optional[int]
     card_message_id: Optional[int]
     picked: bool
+    calendar_id: Optional[str] = None
+    gcal_event_id: Optional[str] = None
 
 
 def _now() -> datetime:
@@ -234,7 +238,8 @@ class Database:
 
     def get_entry(self, entry_id: int) -> Optional[Entry]:
         row = self.conn.execute(
-            "SELECT e.*, p.entry_id IS NOT NULL AS picked FROM entries e LEFT JOIN picks p ON p.entry_id = e.id "
+            "SELECT e.*, p.entry_id IS NOT NULL AS picked, p.calendar_id, p.gcal_event_id "
+            "FROM entries e LEFT JOIN picks p ON p.entry_id = e.id "
             "WHERE e.id = ?", (entry_id,)).fetchone()
         return _to_entry(row) if row else None
 
@@ -257,6 +262,12 @@ class Database:
                               (entry_id, _now().isoformat()))
         else:
             self.conn.execute("DELETE FROM picks WHERE entry_id = ?", (entry_id,))
+        self.conn.commit()
+
+    def set_calendar_event(self, entry_id: int, calendar_id: Optional[str], event_id: Optional[str]) -> None:
+        """C-2: remember where the event lives so it can be moved or deleted later."""
+        self.conn.execute("UPDATE picks SET calendar_id = ?, gcal_event_id = ? WHERE entry_id = ?",
+                          (calendar_id, event_id, entry_id))
         self.conn.commit()
 
     # --- alerts (L-3: once per video) ---
@@ -320,4 +331,4 @@ def _to_video(row: sqlite3.Row) -> Video:
 def _to_entry(row: sqlite3.Row) -> Entry:
     return Entry(row["id"], row["streamer_id"], _dt(row["start_utc"]), row["title"], row["source"], row["video_id"],
                  row["status"], _dt(row["previous_start"]), row["card_channel_id"], row["card_message_id"],
-                 bool(row["picked"]))
+                 bool(row["picked"]), row["calendar_id"], row["gcal_event_id"])

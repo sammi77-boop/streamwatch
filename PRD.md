@@ -92,9 +92,10 @@ Private server, single member (me). Channels:
 ### 5.5 Google Calendar
 | ID | Requirement |
 |---|---|
-| C-1 | Tapping **Add** creates an event in my primary calendar. Title: `💜 {Streamer}: {title}`, plus a 🤝 prefix for collabs. Includes the watch link. Each event is a fixed **2-hour block** from the start time. The real end time isn't tracked. |
+| C-1 | Tapping **Add** creates an event in my chosen calendar (see C-4). Title: `💜 {Streamer}: {title}`, plus a 🤝 prefix for collabs. Includes the watch link. Each event is a fixed **2-hour block** from the start time. The real end time isn't tracked. |
 | C-2 | The event ID is stored, so the agent can update or delete it later. |
 | C-3 | **Changes:** If a picked stream's time changes (waiting room or newer schedule post), the event is updated automatically. If it's cancelled or deleted, the event is removed. Both send a notice to `#weekly-schedule` with old and new values. |
+| C-4 | Events go to **one specific calendar** in one Google account, set once in the server config (`GOOGLE_CALENDAR_ID`). The calendar is shared with the bot's service account, which can't see anything else. No in-app chooser. |
 
 ### 5.6 Go-live detection
 | ID | Requirement |
@@ -150,7 +151,7 @@ Private server, single member (me). Channels:
 |---|---|---|
 | Scraping the YouTube Posts tab breaks or gets blocked (it isn't an official API) | No new schedules from images | Health alert in `#bot-health`, waiting-room fallback, manual `#schedule-drop`. Scraping code kept in one replaceable module. |
 | Stylized schedule graphics fool the OCR | False disagreements | Disagreements go to review instead of being dropped. Tune the image preprocessing. Track the review rate. |
-| **Google OAuth refresh token expires after 7 days** while the app is in "Testing" mode | Calendar silently stops working | Publish the OAuth app as "In production" (unverified is fine for personal use), and alert on auth failures. |
+| Calendar access stops working (service account key deleted, or calendar unshared) | Calendar events stop being added | Alerts still work; the bot posts the problem in `#bot-health` once. (Replaced the OAuth approach, whose tokens expire every 7 days without a published app; see decision 10.) |
 | Streamer posts a schedule with no timezone | Times off by hours | `home_tz` set when the streamer is followed, otherwise review |
 | YouTube blocks requests from the cloud VM's IP ("confirm you're not a bot") | Community scraping (and possibly the live-page watch) fails completely | **M0 spike** tests this before any other work. If blocked: run the scraper from a home machine, or use a paid hosted scraping API. See §9, decision 6. |
 | Members-only streams show up in RSS | Noise | Filter where detectable, otherwise ignore (non-goal) |
@@ -172,9 +173,10 @@ Private server, single member (me). Channels:
 | 1 | How does the agent detect my timezone? | Read the Google Calendar timezone setting (§5.7), with `/timezone` as the manual fallback |
 | 2 | What does the Sunday digest cover? | Sunday 20:00 local, covering the coming Monday–Sunday |
 | 3 | How long are calendar events? | Fixed 2-hour block from the start time, with no end-time tracking (C-1) |
-| 4 | Which calendar? | Primary calendar. Added `/pause` and `/resume` (F-2). |
+| 4 | Which calendar? | One specific calendar in one Google account, set once in config (C-4, changed 2026-10-14). Added `/pause` and `/resume` (F-2). |
 | 5 | Should surprise streams ping me? | Yes, with an @mention ping, styled differently from picked alerts |
 | 6 | What if YouTube blocks the cloud VM? | Decided by the M0 test. Fallbacks in order: (a) run only the scraper on a home machine (residential IP); (b) a paid hosted scraping API, within budget. No proxy rotation, bot-check spoofing, or logged-in cookies. |
 | 7 | Picked streams with no waiting room | Matched to the live stream by time (L-2a), with the live-page watch for fast alerts (L-2b) |
 | 8 | When do streamers post schedules? Do they create waiting rooms? | No fixed pattern for either. Keep the Sunday digest plus midweek updates, and don't assume waiting rooms exist. |
 | 9 | Permanent free-chat waiting rooms | Found during M0 (@kugaleo_Q's room is dated 2028). Ignored by rule I-4a. |
+| 10 | How does the bot get calendar access? | A **service account** (robot Google account) that I share one calendar with. Publishing an OAuth app needs a website and privacy policy on an owned domain, and testing-mode tokens expire every 7 days. (2026-10-14) |

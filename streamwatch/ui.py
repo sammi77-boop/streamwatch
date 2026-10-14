@@ -21,7 +21,7 @@ RED = discord.Color.from_rgb(237, 66, 69)
 DARK = discord.Color.from_rgb(64, 68, 75)
 
 CHANNELS = {
-    "weekly-schedule": "The week's streams. Tap 💜 Pick on the ones you want alerts for.",
+    "weekly-schedule": "The week's streams. Tap 💜 Add to calendar on the ones you want to watch.",
     "go-live": "💜 Pings when a stream you picked goes live.",
     "surprise-live": "❣️ Pings when a followed streamer goes live without announcing it.",
     "bot-health": "Problems the bot runs into, and when they're fixed.",
@@ -61,7 +61,10 @@ def card_embed(entry: Entry, streamer: Streamer) -> discord.Embed:
     if entry.video_id:
         embed.set_thumbnail(url=thumbnail_url(entry.video_id))
     if entry.picked and entry.status != "cancelled":
-        embed.set_footer(text="💜 Picked: you'll get a ping when it goes live")
+        if entry.gcal_event_id:
+            embed.set_footer(text="💜 On your calendar · you'll get a ping when it goes live")
+        else:
+            embed.set_footer(text="💜 Picked · you'll get a ping when it goes live (not on calendar)")
     return embed
 
 
@@ -69,7 +72,8 @@ def card_view(entry: Entry) -> discord.ui.View:
     view = discord.ui.View(timeout=None)
     if entry.status != "cancelled":
         if entry.picked:
-            view.add_item(discord.ui.Button(label="✓ Picked", style=discord.ButtonStyle.success, disabled=True))
+            label = "✓ On calendar" if entry.gcal_event_id else "✓ Picked"
+            view.add_item(discord.ui.Button(label=label, style=discord.ButtonStyle.success, disabled=True))
             view.add_item(UnpickButton(entry.id))
         else:
             view.add_item(PickButton(entry.id))
@@ -102,15 +106,18 @@ class _OwnerButton:
         if entry is None:
             await interaction.response.send_message("That stream is no longer tracked.", ephemeral=True)
             return
-        bot.db.set_picked(entry.id, picked)
+        await interaction.response.defer()  # calendar calls can take a few seconds
+        problem = await (bot.pick(entry) if picked else bot.unpick(entry))
         entry = bot.db.get_entry(entry.id)
-        await interaction.response.edit_message(embed=card_embed(entry, bot.db.get_streamer(entry.streamer_id)),
-                                                view=card_view(entry))
+        await interaction.edit_original_response(embed=card_embed(entry, bot.db.get_streamer(entry.streamer_id)),
+                                                 view=card_view(entry))
+        if problem:
+            await interaction.followup.send(problem, ephemeral=True)
 
 
 class PickButton(_OwnerButton, discord.ui.DynamicItem[discord.ui.Button], template=r"sw:pick:(?P<id>\d+)"):
     def __init__(self, entry_id: int):
-        super().__init__(entry_id, discord.ui.Button(label="💜 Pick", style=discord.ButtonStyle.primary,
+        super().__init__(entry_id, discord.ui.Button(label="💜 Add to calendar", style=discord.ButtonStyle.primary,
                                                      custom_id=f"sw:pick:{entry_id}"))
 
     async def callback(self, interaction: discord.Interaction) -> None:

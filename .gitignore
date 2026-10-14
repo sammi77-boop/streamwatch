@@ -8,5 +8,5 @@ m0/paste_into_vm.txt
 PRD.pdf
 keys:.ssh/
 .DS_Store
+google_service_account.json
 client_secret*.json
-google_token.json
