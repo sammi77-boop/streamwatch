@@ -59,8 +59,11 @@ Return one entry per scheduled stream. Rules:
   Example: under "15th of October, THU": JST 07:00 (FRI) / EDT 6:00 PM / PDT 3:00 PM → date 2026-10-15,
   start_time 18:00, timezone_as_written EDT (the first row without a marker). Never pair one timezone's time with
   another timezone's date. If no timezone is printed anywhere, use null.
-- Two times on one row separated by "|", "-" or "~" (e.g. "6 PM | 9 PM") are the start and end of ONE stream:
-  use the first as start_time. This alone isn't a reason for low confidence.
+- Two times on one row separated by "|" (e.g. "6 PM | 9 PM"):
+  * if the slot shows two titles (e.g. "BACK N' FORTH" and "#FSFABLES | DAY 3"), they are TWO streams: the first
+    title at the first time, the second title at the second time. Return two entries.
+  * if the slot shows one title, it's one stream: use the first time.
+  A range written with "-" or "~" (e.g. "8PM-11PM") is start and end of one stream.
 - other_times: list every other timezone row printed for that stream, each with its own date in that timezone
   (apply its day marker: "07:00 (FRI)" under a THU column means Friday's date).
 - slot_date is the date printed for that day/column. date must be the day the stream starts in
