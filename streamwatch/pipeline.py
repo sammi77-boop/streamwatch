@@ -57,7 +57,7 @@ class ImageResult:
         new = sum(isinstance(e, NewImageEntry) for e in self.events)
         review = sum(isinstance(e, NeedsReview) for e in self.events)
         merged = sum(isinstance(e, (Updated, Rescheduled)) for e in self.events)
-        parts = [f"**{new}** added to #weekly-schedule"]
+        parts = [f"**{new}** added to #schedule-images"]
         if merged:
             parts.append(f"**{merged}** matched streams already listed")
         if self.duplicates:

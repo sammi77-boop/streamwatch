@@ -62,6 +62,7 @@ A single-user agent that **finds schedules automatically, sends the weekly sched
 | I-1 | **Community tab scrape:** Every 2–3 h, fetch each followed channel's Posts tab, parse new posts (text + images) and dedupe by post ID. |
 | I-2 | **Schedule triage:** A cheap model call classifies each new post as "schedule" or "not schedule". Only schedule posts go on to extraction. |
 | I-3 | **Waiting rooms:** Every 15 min, read each channel's RSS feed (free) to find new video IDs, then call `videos.list` (1 quota unit per 50 videos) for `liveBroadcastContent`, `scheduledStartTime`, title and description. |
+| I-3a | **Instant waiting rooms (WebSub push):** the bot subscribes each followed channel at YouTube's hub; when a streamer creates or updates a video, the hub pushes it to the bot within about a minute and it's looked up right away. Signed with a shared secret; subscriptions renewed every 2 days. RSS polling every 15 min stays as the backup. (Added 2026-10-14.) |
 | I-4 | **Reconciliation:** Match image entries to waiting rooms by date, start time within ±90 min, and title similarity. When a waiting room exists, **its exact start time and title win**. Waiting rooms with no matching image entry are added as entries in their own right. |
 | I-4a | **Ignore free-chat rooms:** skip waiting rooms scheduled more than 30 days ahead, or titled "free chat" / "フリーチャット". Many VTubers keep one permanently, with a fake far-future date, and it must never become an entry or match a picked stream. |
 | I-5 | Scraping failures (layout change, blocked) raise a `#bot-health` alert. The system keeps running on waiting rooms plus manual drops. |
@@ -80,7 +81,9 @@ Private server, single member (me). Channels:
 
 | Channel | What it's for |
 |---|---|
-| `#weekly-schedule` | The week's streams, posted Sunday 20:00 (Mon–Sun ahead). New schedules posted midweek appear here too. Tapping **Add to calendar** on a card puts that stream on my calendar. |
+| `#weekly-schedule` | The Sunday 20:00 digest of the coming Mon–Sun. |
+| `#waiting-rooms` | A card for each stream found from a YouTube waiting room. Tapping **Add to calendar** puts it on my calendar. |
+| `#schedule-images` | A card for each stream read from a schedule image (`/drop`, later community posts), with the image, Edit and Delete. |
 | `#go-live` | 💜 Pings me when a stream I picked goes live |
 | `#surprise-live` | ❣️ Pings me when a followed streamer goes live without announcing it |
 | `#needs-review` | Schedule entries the bot couldn't read confidently. Confirm, fix or discard them. |

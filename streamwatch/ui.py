@@ -23,7 +23,9 @@ DARK = discord.Color.from_rgb(64, 68, 75)
 AMBER = discord.Color.from_rgb(250, 166, 26)   # needs review
 
 CHANNELS = {
-    "weekly-schedule": "The week's streams. Tap 💜 Add to calendar on the ones you want to watch.",
+    "weekly-schedule": "The Sunday digest of the coming week's streams.",
+    "waiting-rooms": "Streams found from YouTube waiting rooms. Tap 💜 Add to calendar on the ones you want.",
+    "schedule-images": "Streams read from schedule images (/drop). Tap 💜 Add to calendar on the ones you want.",
     "go-live": "💜 Pings when a stream you picked goes live.",
     "surprise-live": "❣️ Pings when a followed streamer goes live without announcing it.",
     "needs-review": "Schedule entries the bot couldn't read confidently. Confirm, fix or discard them.",
@@ -31,6 +33,11 @@ CHANNELS = {
 }
 SCHEDULE_FILENAME = "schedule.jpg"  # name of the schedule image attached to image cards
 SOURCE_LABELS = {"waiting_room": "Waiting room", "image": "Schedule image", "both": "Schedule image + waiting room"}
+
+
+def card_channel(entry: Entry) -> str:
+    """Waiting-room cards and schedule-image cards live in separate channels."""
+    return "waiting-rooms" if entry.source == "waiting_room" else "schedule-images"
 
 
 def watch_url(video_id: str) -> str:
@@ -201,7 +208,7 @@ def review_embed(entry: Entry, streamer: Streamer, issues: list[str], state: str
 
     The reasons (issues) are logged, not shown: the owner only needs the result to compare with the image."""
     titles = {"open": "🔍 Is this right?",
-              "confirmed": "✅ Confirmed: added to #weekly-schedule (use ✏️ Edit or 🗑 Delete on its card)",
+              "confirmed": "✅ Confirmed: added to #schedule-images (use ✏️ Edit or 🗑 Delete on its card)",
               "discarded": "🗑️ Discarded"}
     stream = f"🤝 COLLAB · {entry.title}" if entry.is_collab else entry.title
     lines = [f"**{stream}**",

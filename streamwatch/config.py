@@ -32,6 +32,8 @@ class Config:
     google_calendar_id: Optional[str]
     anthropic_api_key: Optional[str] = None
     images_dir: Path = ROOT / "schedule_images"
+    websub_port: int = 8080
+    websub_host: Optional[str] = None   # public IP/hostname for the push callback; found automatically on GCP
 
 
 def load_config() -> Config:
@@ -52,4 +54,6 @@ def load_config() -> Config:
         google_calendar_id=os.environ.get("GOOGLE_CALENDAR_ID") or None,
         # M4: schedule image reading. Without it, /drop explains how to turn it on.
         anthropic_api_key=os.environ.get("ANTHROPIC_API_KEY") or None,
+        websub_port=int(os.environ.get("WEBSUB_PORT", "8080")),
+        websub_host=os.environ.get("WEBSUB_HOST") or None,
     )

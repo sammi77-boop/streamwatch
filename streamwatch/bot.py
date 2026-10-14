@@ -25,7 +25,8 @@ from .gcal import CalendarAuthError, CalendarError, GoogleCalendar, event_descri
 from .parsing import CHANNEL_URL_EXAMPLE, parse_channel_url, parse_duration, suggest_timezones, valid_timezone
 from .pipeline import NeedsReview, NewImageEntry, TimezoneSuggestion, process_image
 from .tracker import Cancelled, Event, NewWaitingRoom, Rescheduled, SurpriseLive, Updated, WentLive, apply_update
-from .ui import (CHANNELS, SCHEDULE_FILENAME, ConfirmReviewButton, DeleteCardButton, DiscardReviewButton, EditCardButton,
+from . import websub
+from .ui import (CHANNELS, SCHEDULE_FILENAME, card_channel, ConfirmReviewButton, DeleteCardButton, DiscardReviewButton, EditCardButton,
                  EditReviewButton, KeepTimezoneButton, PickButton, SetTimezoneButton, UnpickButton, card_embed, card_view, change_notice, live_alert,
                  review_embed, review_view, timezone_suggestion)
 from .youtube import (YouTubeError, fetch_live_video_id, fetch_rss_video_ids, fetch_videos, resolve_channel,
@@ -73,6 +74,9 @@ class StreamWatch(discord.Client):
         self.youtube_ok = True
         self.calendar_ok = True
         self.calendar: Optional[GoogleCalendar] = None
+        self.websub_server: Optional[websub.WebSubServer] = None
+        self.websub_callback: Optional[str] = None
+        self.websub_ok = True
 
     async def setup_hook(self) -> None:
         self.http_session = aiohttp.ClientSession()
@@ -90,8 +94,11 @@ class StreamWatch(discord.Client):
         self.watch_pause.start()
         self.poll.start()
         self.watch_live_pages.start()
+        await self.start_websub()
 
     async def close(self) -> None:
+        if self.websub_server:
+            await self.websub_server.stop()
         if self.http_session:
             await self.http_session.close()
         await super().close()
@@ -200,7 +207,7 @@ class StreamWatch(discord.Client):
     async def handle_event(self, streamer: Streamer, event: Event) -> None:
         if isinstance(event, (NewWaitingRoom, NewImageEntry)):
             names = await self.partner_names(event.entry)
-            message = await self.send("weekly-schedule", embed=card_embed(event.entry, streamer, names),
+            message = await self.send(card_channel(event.entry), embed=card_embed(event.entry, streamer, names),
                                       view=card_view(event.entry), **self.schedule_file(event.entry.image_path))
             if message:
                 self.db.update_entry(event.entry.id, card_channel_id=message.channel.id, card_message_id=message.id)
@@ -209,11 +216,76 @@ class StreamWatch(discord.Client):
             await self.refresh_card(self.db.get_entry(event.entry.id), streamer)
             if event.entry.picked and not isinstance(event, Updated):
                 old = event.old_start if isinstance(event, Rescheduled) else None
-                await self.send("weekly-schedule", content=change_notice(event.entry, streamer, old))
+                await self.send(card_channel(event.entry), content=change_notice(event.entry, streamer, old))
         elif isinstance(event, WentLive):
             await self.send("go-live", **live_alert(streamer, event.video, self.config.owner_id, surprise=False))
         elif isinstance(event, SurpriseLive):
             await self.send("surprise-live", **live_alert(streamer, event.video, self.config.owner_id, surprise=True))
+
+    # --- Instant waiting rooms via WebSub push (polling stays on as backup) ---
+
+    async def start_websub(self) -> None:
+        token = self.db.get_setting("websub_token")
+        secret = self.db.get_setting("websub_secret")
+        if not (token and secret):
+            import secrets
+            token, secret = secrets.token_urlsafe(16), secrets.token_urlsafe(32)
+            self.db.set_setting("websub_token", token)
+            self.db.set_setting("websub_secret", secret)
+        host = self.config.websub_host or await websub.public_ip(self.http_session)
+        if not host:
+            log.warning("No public address for WebSub; relying on polling only")
+            return
+        self.websub_server = websub.WebSubServer(
+            token, secret, lambda: {s.channel_id for s in self.db.list_streamers()}, self.check_pushed_video)
+        await self.websub_server.start(self.config.websub_port)
+        self.websub_callback = websub.callback_url(host, self.config.websub_port, token)
+        self.renew_websub.start()
+
+    async def websub_request(self, channel_id: str, subscribe: bool = True) -> bool:
+        if not self.websub_callback:
+            return False
+        try:
+            return await websub.request(self.http_session, self.websub_callback, self.db.get_setting("websub_secret"),
+                                        channel_id, subscribe)
+        except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+            log.warning("WebSub %s failed for %s: %s", "subscribe" if subscribe else "unsubscribe", channel_id, e)
+            return False
+
+    @tasks.loop(hours=48)
+    async def renew_websub(self) -> None:
+        """Leases last about 5 days, so (re)subscribe every followed channel every 2 days."""
+        results = [await self.websub_request(s.channel_id) for s in self.db.list_streamers()]
+        log.info("WebSub: %d/%d subscriptions requested", sum(results), len(results))
+        if not all(results) and self.websub_ok:
+            self.websub_ok = False
+            await self.send("bot-health", content="⚠️ Couldn't set up instant waiting-room alerts for every "
+                                                  "streamer. Regular checks every 15 minutes still run.")
+        elif all(results):
+            self.websub_ok = True
+
+    @renew_websub.before_loop
+    async def _before_renew(self) -> None:
+        await self.wait_until_ready()
+
+    async def check_pushed_video(self, channel_id: str, video_id: str) -> None:
+        """A followed channel just published or updated a video: look it up now instead of waiting for polling."""
+        if self.db.is_paused() or len(self.channels) < len(CHANNELS):
+            return  # polling picks it up after resume / once channels exist
+        streamer = self.db.get_streamer_by_channel(channel_id)
+        if streamer is None or not streamer.active:
+            return
+        try:
+            infos = await fetch_videos(self.http_session, self.config.youtube_api_key, [video_id])
+        except (YouTubeError, aiohttp.ClientError, asyncio.TimeoutError) as e:
+            log.warning("Pushed video lookup failed: %s", e)
+            return
+        async with self.poll_lock:
+            events = apply_update(self.db, streamer, video_id, infos.get(video_id), datetime.now(timezone.utc),
+                                  alerts_enabled=streamer.bootstrapped)
+            for event in events:
+                await self.handle_event(streamer, event)
+        log.info("Push for %s handled: %d events", video_id, len(events))
 
     # --- M4: schedule images (F-3, X-1 to X-5) ---
 
@@ -473,6 +545,7 @@ def register_commands(bot: StreamWatch) -> None:
             "Checking their upcoming streams now…")
         if not bot.db.is_paused() and len(bot.channels) == len(CHANNELS):
             asyncio.create_task(bot.run_checks(read_rss=True))
+        asyncio.create_task(bot.websub_request(streamer.channel_id))
 
     @follow.autocomplete("home_tz")
     async def follow_tz_autocomplete(interaction: discord.Interaction, current: str):
@@ -487,6 +560,7 @@ def register_commands(bot: StreamWatch) -> None:
                                                     ephemeral=True)
             return
         bot.db.deactivate_streamer(streamer.id)
+        asyncio.create_task(bot.websub_request(streamer.channel_id, subscribe=False))
         await interaction.response.send_message(f"👋 Stopped following **{streamer.name}**.")
 
     @unfollow.autocomplete("name")
