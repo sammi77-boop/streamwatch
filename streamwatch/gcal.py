@@ -96,9 +96,12 @@ class GoogleCalendar:
         })
         return body["id"]
 
-    async def move_event(self, calendar_id: str, event_id: str, start: datetime, title: str) -> None:
+    async def move_event(self, calendar_id: str, event_id: str, start: datetime, title: str,
+                         description: Optional[str] = None) -> None:
+        """Update time and title (and description if given) of an existing event."""
+        body = {"description": description} if description is not None else {}
         await self._call("PATCH", f"/calendars/{quote(calendar_id)}/events/{quote(event_id)}", json_body={
-            "summary": title,
+            **body, "summary": title,
             "start": {"dateTime": start.isoformat()}, "end": {"dateTime": (start + EVENT_LENGTH).isoformat()},
         })
 
@@ -120,8 +123,11 @@ def event_title(streamer_name: str, stream_title: str, is_collab: bool = False) 
     return f"{'🤝 ' if is_collab else ''}💜 {streamer_name}: {stream_title}"
 
 
-def event_description(video_id: Optional[str]) -> str:
-    lines = ["Added by StreamWatch."]
+def event_description(video_id: Optional[str], partner_names: list[str] = ()) -> str:
+    lines = []
     if video_id:
-        lines.insert(0, f"Watch: https://www.youtube.com/watch?v={video_id}")
+        lines.append(f"Watch: https://www.youtube.com/watch?v={video_id}")
+    if partner_names:
+        lines.append("Collab with: " + ", ".join(partner_names))
+    lines.append("Added by StreamWatch.")
     return "\n".join(lines)

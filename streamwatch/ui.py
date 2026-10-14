@@ -41,15 +41,21 @@ def when(dt: datetime) -> str:
     return f"{discord.utils.format_dt(dt, 'F')}\n{discord.utils.format_dt(dt, 'R')}"
 
 
-def card_embed(entry: Entry, streamer: Streamer) -> discord.Embed:
+def card_embed(entry: Entry, streamer: Streamer, partner_names: list[str] = ()) -> discord.Embed:
+    title = f"🤝 COLLAB · {entry.title}" if entry.is_collab else entry.title
     if entry.status == "cancelled":
-        color, title = DARK, f"✖ Cancelled · {entry.title}"
+        color, title = DARK, f"✖ Cancelled · {title}"
     elif entry.previous_start:
-        color, title = (PURPLE if entry.picked else GREY), f"⚠ Rescheduled · {entry.title}"
+        color, title = (PURPLE if entry.picked else GREY), f"⚠ Rescheduled · {title}"
     else:
-        color, title = (PURPLE if entry.picked else GREY), entry.title
+        color = PURPLE if entry.picked else GREY
     embed = discord.Embed(title=title[:256], color=color, url=watch_url(entry.video_id) if entry.video_id else None)
-    embed.set_author(name=streamer.name)
+    # Embeds only colour a thin side stripe, so the picked state also gets a banner line.
+    if entry.picked and entry.status != "cancelled":
+        banner = "💜 ON YOUR CALENDAR" if entry.gcal_event_id else "💜 PICKED"
+        embed.set_author(name=f"{banner} · {streamer.name}")
+    else:
+        embed.set_author(name=streamer.name)
     if entry.status == "cancelled":
         embed.add_field(name="📅 Was", value=f"~~{discord.utils.format_dt(entry.start_utc, 'F')}~~")
     else:
@@ -58,6 +64,8 @@ def card_embed(entry: Entry, streamer: Streamer) -> discord.Embed:
             value += f"\n~~{discord.utils.format_dt(entry.previous_start, 'f')}~~"
         embed.add_field(name="📅 When", value=value)
     embed.add_field(name="📍 Source", value="Waiting room" if entry.source == "waiting_room" else entry.source)
+    if partner_names:
+        embed.add_field(name="🤝 With", value=", ".join(partner_names)[:1024], inline=False)
     if entry.video_id:
         embed.set_thumbnail(url=thumbnail_url(entry.video_id))
     if entry.picked and entry.status != "cancelled":
@@ -109,8 +117,8 @@ class _OwnerButton:
         await interaction.response.defer()  # calendar calls can take a few seconds
         problem = await (bot.pick(entry) if picked else bot.unpick(entry))
         entry = bot.db.get_entry(entry.id)
-        await interaction.edit_original_response(embed=card_embed(entry, bot.db.get_streamer(entry.streamer_id)),
-                                                 view=card_view(entry))
+        embed = card_embed(entry, bot.db.get_streamer(entry.streamer_id), await bot.partner_names(entry))
+        await interaction.edit_original_response(embed=embed, view=card_view(entry))
         if problem:
             await interaction.followup.send(problem, ephemeral=True)
 

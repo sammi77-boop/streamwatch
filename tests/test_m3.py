@@ -27,11 +27,11 @@ class FakeCalendar:
         if self.fail_with:
             raise self.fail_with
         event_id = f"ev{len(self.events) + 1}"
-        self.events[event_id] = {"calendar": calendar_id, "title": title, "start": start}
+        self.events[event_id] = {"calendar": calendar_id, "title": title, "start": start, "description": description}
         return event_id
 
-    async def move_event(self, calendar_id, event_id, start, title):
-        self.events[event_id].update(start=start, title=title)
+    async def move_event(self, calendar_id, event_id, start, title, description=None):
+        self.events[event_id].update(start=start, title=title, description=description)
 
     async def delete_event(self, calendar_id, event_id):
         if self.fail_with:
@@ -121,6 +121,18 @@ class CalendarFlowTest(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(GoogleCalendar(None, Path("/nonexistent"), "cal@x").connected)
         self.assertFalse(GoogleCalendar(None, Path(__file__), None).connected)
         self.assertTrue(GoogleCalendar(None, Path(__file__), "cal@x").connected)
+
+    async def test_collab_found_later_updates_calendar_event(self):
+        await self.bot.pick(self.entry)
+        self.db.save_handle_names({"@dubstep_ch": "Dubstep 【NIJISANJI EN】"})
+        info = VideoInfo("v1", "UC1", "Silent Hill pt 3", "upcoming", START, None, False,
+                         "Collab w/\n@DubsteP_ch\n\nmerch")
+        events = apply_update(self.db, self.streamer, "v1", info, NOW)
+        self.assertEqual(type(events[0]).__name__, "Updated")
+        await self.bot.sync_calendar_change(events[0].entry)
+        event = self.bot.calendar.events[self.db.get_entry(self.entry.id).gcal_event_id]
+        self.assertEqual(event["title"], "🤝 💜 Vantacrow: Silent Hill pt 3")
+        self.assertIn("Collab with: Dubstep", event["description"])
 
     async def test_event_title(self):
         self.assertEqual(event_title("Kuga Leo", "DEVOUR"), "💜 Kuga Leo: DEVOUR")

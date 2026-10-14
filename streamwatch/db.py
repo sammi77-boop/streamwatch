@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -58,6 +59,11 @@ CREATE TABLE IF NOT EXISTS picks (
     calendar_id   TEXT,
     picked_at     TEXT NOT NULL
 );
+-- Display names for collab partners' @handles, so each is looked up once.
+CREATE TABLE IF NOT EXISTS handle_names (
+    handle TEXT PRIMARY KEY,                -- lowercase, with @
+    name   TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS alerts (
     video_id TEXT PRIMARY KEY,
     kind     TEXT NOT NULL,                 -- picked | surprise
@@ -109,6 +115,8 @@ class Entry:
     card_channel_id: Optional[int]
     card_message_id: Optional[int]
     picked: bool
+    is_collab: bool = False
+    partners: list = None
     calendar_id: Optional[str] = None
     gcal_event_id: Optional[str] = None
 
@@ -228,10 +236,12 @@ class Database:
     # --- entries and picks ---
 
     def create_entry(self, streamer_id: int, start_utc: datetime, title: str, source: str,
-                     video_id: Optional[str] = None) -> Entry:
+                     video_id: Optional[str] = None, is_collab: bool = False, partners: list = ()) -> Entry:
         cur = self.conn.execute(
-            "INSERT INTO entries (streamer_id, start_utc, title, source, video_id, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-            (streamer_id, start_utc.isoformat(), title, source, video_id, _now().isoformat()),
+            "INSERT INTO entries (streamer_id, start_utc, title, source, video_id, is_collab, partners_json, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (streamer_id, start_utc.isoformat(), title, source, video_id, int(is_collab), json.dumps(list(partners)),
+             _now().isoformat()),
         )
         self.conn.commit()
         return self.get_entry(cur.lastrowid)
@@ -248,7 +258,12 @@ class Database:
         return self.get_entry(row["id"]) if row else None
 
     def update_entry(self, entry_id: int, **fields) -> Entry:
-        allowed = {"start_utc", "title", "status", "previous_start", "card_channel_id", "card_message_id"}
+        if "partners" in fields:
+            fields["partners_json"] = json.dumps(list(fields.pop("partners")))
+        if "is_collab" in fields:
+            fields["is_collab"] = int(fields["is_collab"])
+        allowed = {"start_utc", "title", "status", "previous_start", "card_channel_id", "card_message_id",
+                   "is_collab", "partners_json"}
         assert set(fields) <= allowed, set(fields) - allowed
         values = [v.isoformat() if isinstance(v, datetime) else v for v in fields.values()]
         assignments = ", ".join(f"{k} = ?" for k in fields)
@@ -268,6 +283,21 @@ class Database:
         """C-2: remember where the event lives so it can be moved or deleted later."""
         self.conn.execute("UPDATE picks SET calendar_id = ?, gcal_event_id = ? WHERE entry_id = ?",
                           (calendar_id, event_id, entry_id))
+        self.conn.commit()
+
+    # --- collab partner names ---
+
+    def handle_names(self, handles: list[str]) -> dict[str, str]:
+        if not handles:
+            return {}
+        keys = [h.lower() for h in handles]
+        rows = self.conn.execute(f"SELECT handle, name FROM handle_names WHERE handle IN ({','.join('?' * len(keys))})",
+                                 keys).fetchall()
+        return {r["handle"]: r["name"] for r in rows}
+
+    def save_handle_names(self, names: dict[str, str]) -> None:
+        self.conn.executemany("INSERT OR REPLACE INTO handle_names (handle, name) VALUES (?, ?)",
+                              [(h.lower(), n) for h, n in names.items()])
         self.conn.commit()
 
     # --- alerts (L-3: once per video) ---
@@ -331,4 +361,5 @@ def _to_video(row: sqlite3.Row) -> Video:
 def _to_entry(row: sqlite3.Row) -> Entry:
     return Entry(row["id"], row["streamer_id"], _dt(row["start_utc"]), row["title"], row["source"], row["video_id"],
                  row["status"], _dt(row["previous_start"]), row["card_channel_id"], row["card_message_id"],
-                 bool(row["picked"]), row["calendar_id"], row["gcal_event_id"])
+                 bool(row["picked"]), bool(row["is_collab"]), json.loads(row["partners_json"] or "[]"),
+                 row["calendar_id"], row["gcal_event_id"])

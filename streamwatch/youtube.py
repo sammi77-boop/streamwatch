@@ -58,6 +58,7 @@ class VideoInfo:
     scheduled_start: Optional[datetime]
     actual_start: Optional[datetime]
     is_premiere: bool                   # premieres also report "upcoming"; they're out of scope
+    description: str = ""
 
 
 def parse_rss_video_ids(xml_text: str) -> list[str]:
@@ -87,6 +88,7 @@ def parse_video_item(item: dict) -> VideoInfo:
         actual_start=_parse_time(live.get("actualStartTime")),
         # A live stream's duration is P0D until it ends; a premiere already has its real length.
         is_premiere=broadcast == "upcoming" and duration not in ("P0D", ""),
+        description=snippet.get("description", ""),
     )
 
 
@@ -108,3 +110,16 @@ async def fetch_videos(session: aiohttp.ClientSession, api_key: str, video_ids: 
 
 def _parse_time(value: Optional[str]) -> Optional[datetime]:
     return datetime.fromisoformat(value.replace("Z", "+00:00")) if value else None
+
+
+async def resolve_handle_names(session: aiohttp.ClientSession, api_key: str, handles: list[str]) -> dict[str, str]:
+    """@handle → channel name for collab partners (channels.list, 1 unit each). Unknown handles are skipped."""
+    names = {}
+    for handle in handles:
+        try:
+            info = await resolve_channel(session, api_key, handle=handle)
+        except (YouTubeError, aiohttp.ClientError):
+            continue
+        if info:
+            names[handle.lower()] = info.title
+    return names

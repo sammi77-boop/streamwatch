@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Optional, Union
 
+from .collab import detect_collab
 from .db import Database, Entry, Streamer
 from .youtube import VideoInfo
 
@@ -27,6 +28,12 @@ class Rescheduled:
 
 
 @dataclass
+class Updated:
+    """Title or collab partners changed; refresh the card and calendar event."""
+    entry: Entry
+
+
+@dataclass
 class Cancelled:
     entry: Entry
 
@@ -42,7 +49,7 @@ class SurpriseLive:
     video: VideoInfo
 
 
-Event = Union[NewWaitingRoom, Rescheduled, Cancelled, WentLive, SurpriseLive]
+Event = Union[NewWaitingRoom, Rescheduled, Updated, Cancelled, WentLive, SurpriseLive]
 
 
 def is_free_chat(info: VideoInfo, now: datetime) -> bool:
@@ -78,18 +85,21 @@ def apply_update(db: Database, streamer: Streamer, video_id: str, info: Optional
 
     events: list[Event] = []
     if info.broadcast == "upcoming" and info.scheduled_start:
+        is_collab, partners = detect_collab(info.title, info.description, streamer.handle)
+        details = {"title": info.title, "is_collab": is_collab, "partners": partners}
         if entry is None:
-            entry = db.create_entry(streamer.id, info.scheduled_start, info.title, "waiting_room", video_id)
+            entry = db.create_entry(streamer.id, info.scheduled_start, info.title, "waiting_room", video_id,
+                                    is_collab, partners)
             events.append(NewWaitingRoom(entry))
         elif entry.status == "cancelled":
-            entry = db.update_entry(entry.id, status="confirmed", start_utc=info.scheduled_start, title=info.title)
+            entry = db.update_entry(entry.id, status="confirmed", start_utc=info.scheduled_start, **details)
             events.append(NewWaitingRoom(entry))
         elif abs(entry.start_utc - info.scheduled_start) > RESCHEDULE_TOLERANCE:
             old = entry.start_utc
-            entry = db.update_entry(entry.id, start_utc=info.scheduled_start, previous_start=old, title=info.title)
+            entry = db.update_entry(entry.id, start_utc=info.scheduled_start, previous_start=old, **details)
             events.append(Rescheduled(entry, old))
-        elif entry.title != info.title:
-            db.update_entry(entry.id, title=info.title)
+        elif (entry.title, entry.is_collab, entry.partners) != (info.title, is_collab, partners):
+            events.append(Updated(db.update_entry(entry.id, **details)))
 
     elif info.broadcast == "live":
         if entry is not None:

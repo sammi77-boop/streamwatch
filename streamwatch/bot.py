@@ -17,11 +17,12 @@ from discord.ext import tasks
 
 from .config import Config, load_config
 from .db import PAUSED_FOREVER, Database, Entry, Streamer
+from .collab import short_channel_name
 from .gcal import CalendarAuthError, CalendarError, GoogleCalendar, event_description, event_title
 from .parsing import CHANNEL_URL_EXAMPLE, parse_channel_url, parse_duration, suggest_timezones, valid_timezone
-from .tracker import Cancelled, Event, NewWaitingRoom, Rescheduled, SurpriseLive, WentLive, apply_update
+from .tracker import Cancelled, Event, NewWaitingRoom, Rescheduled, SurpriseLive, Updated, WentLive, apply_update
 from .ui import CHANNELS, PickButton, UnpickButton, card_embed, card_view, change_notice, live_alert
-from .youtube import YouTubeError, fetch_rss_video_ids, fetch_videos, resolve_channel
+from .youtube import YouTubeError, fetch_rss_video_ids, fetch_videos, resolve_channel, resolve_handle_names
 
 log = logging.getLogger("streamwatch")
 
@@ -182,20 +183,33 @@ class StreamWatch(discord.Client):
 
     async def handle_event(self, streamer: Streamer, event: Event) -> None:
         if isinstance(event, NewWaitingRoom):
-            message = await self.send("weekly-schedule", embed=card_embed(event.entry, streamer),
+            names = await self.partner_names(event.entry)
+            message = await self.send("weekly-schedule", embed=card_embed(event.entry, streamer, names),
                                       view=card_view(event.entry))
             if message:
                 self.db.update_entry(event.entry.id, card_channel_id=message.channel.id, card_message_id=message.id)
-        elif isinstance(event, (Rescheduled, Cancelled)):
+        elif isinstance(event, (Rescheduled, Updated, Cancelled)):
             await self.sync_calendar_change(event.entry)
             await self.refresh_card(self.db.get_entry(event.entry.id), streamer)
-            if event.entry.picked:
+            if event.entry.picked and not isinstance(event, Updated):
                 old = event.old_start if isinstance(event, Rescheduled) else None
                 await self.send("weekly-schedule", content=change_notice(event.entry, streamer, old))
         elif isinstance(event, WentLive):
             await self.send("go-live", **live_alert(streamer, event.video, self.config.owner_id, surprise=False))
         elif isinstance(event, SurpriseLive):
             await self.send("surprise-live", **live_alert(streamer, event.video, self.config.owner_id, surprise=True))
+
+    async def partner_names(self, entry: Entry) -> list[str]:
+        """Collab partners for display: @handles become channel names (looked up once, then cached)."""
+        partners = entry.partners or []
+        handles = [p for p in partners if p.startswith("@")]
+        known = self.db.handle_names(handles)
+        missing = [h for h in handles if h.lower() not in known]
+        if missing and self.http_session:
+            found = await resolve_handle_names(self.http_session, self.config.youtube_api_key, missing)
+            self.db.save_handle_names(found)
+            known.update(found)
+        return [short_channel_name(known.get(p.lower(), p)) if p.startswith("@") else p for p in partners]
 
     # --- M3: Google Calendar (C-1 to C-4) ---
 
@@ -221,8 +235,9 @@ class StreamWatch(discord.Client):
         streamer = self.db.get_streamer(entry.streamer_id)
         calendar_id = self.calendar.calendar_id
         try:
-            event_id = await self.calendar.create_event(calendar_id, event_title(streamer.name, entry.title),
-                                                        entry.start_utc, event_description(entry.video_id))
+            event_id = await self.calendar.create_event(
+                calendar_id, event_title(streamer.name, entry.title, entry.is_collab), entry.start_utc,
+                event_description(entry.video_id, await self.partner_names(entry)))
         except CalendarError as e:
             return "⚠️ Picked for go-live alerts, but couldn't add it to your calendar. " + await self._calendar_failed(e)
         self.db.set_calendar_event(entry.id, calendar_id, event_id)
@@ -249,8 +264,10 @@ class StreamWatch(discord.Client):
                 await self.calendar.delete_event(entry.calendar_id, entry.gcal_event_id)
                 self.db.set_calendar_event(entry.id, None, None)
             else:
-                await self.calendar.move_event(entry.calendar_id, entry.gcal_event_id, entry.start_utc,
-                                               event_title(streamer.name, entry.title))
+                await self.calendar.move_event(
+                    entry.calendar_id, entry.gcal_event_id, entry.start_utc,
+                    event_title(streamer.name, entry.title, entry.is_collab),
+                    event_description(entry.video_id, await self.partner_names(entry)))
         except CalendarError as e:
             await self._calendar_failed(e)
 
@@ -261,8 +278,8 @@ class StreamWatch(discord.Client):
         if channel is None:
             return
         try:
-            await channel.get_partial_message(entry.card_message_id).edit(embed=card_embed(entry, streamer),
-                                                                          view=card_view(entry))
+            embed = card_embed(entry, streamer, await self.partner_names(entry))
+            await channel.get_partial_message(entry.card_message_id).edit(embed=embed, view=card_view(entry))
         except discord.NotFound:
             log.info("Card for entry %s was deleted; not refreshing", entry.id)
 
