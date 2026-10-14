@@ -8,6 +8,8 @@ from typing import TYPE_CHECKING, Optional
 
 import discord
 
+from zoneinfo import ZoneInfo
+
 from .db import Entry, Streamer
 from .schedule import ReadEntry, resolve_timezone, to_utc
 from .youtube import VideoInfo
@@ -408,3 +410,116 @@ def timezone_suggestion(streamer: Streamer, written: str, iana: str) -> dict:
     return {"content": (f"🕒 **{streamer.name}**'s schedule uses **{written}**, but their home timezone is "
                         f"`{streamer.home_tz}`. The home timezone is only used for images that show no timezone."),
             "view": view}
+
+
+# --- #schedule-images: one table message per dropped schedule ---
+
+def _schedule_line(entry: Entry, partner_names: list[str]) -> str:
+    title = f"**{entry.title}**" + (f" · *{entry.subtitle}*" if entry.subtitle else "")
+    when_text = f"**{discord.utils.format_dt(entry.start_utc, 'F')}**"
+    if entry.status == "cancelled":
+        return f"~~{when_text}: {title}~~ ✖ cancelled"
+    line = f"{when_text}: {title}"
+    if entry.picked:
+        line += " 💜"
+    if entry.status == "pending_review":
+        line += " ⏳ *check in #needs-review*"
+    if entry.is_collab:
+        line += "\n　🤝 " + (f"*with {', '.join(partner_names)}*" if partner_names else "*collab*")
+    return line
+
+
+def schedule_embed(streamer: Streamer, entries: list[Entry], names: dict[int, list[str]],
+                   has_image: bool) -> discord.Embed:
+    """The summary table: one line per stream in the viewer's local time, title and subtitle, collab partners."""
+    lines = [_schedule_line(e, names.get(e.id, [])) for e in entries] or ["*No upcoming streams from this schedule.*"]
+    embed = discord.Embed(title=f"📅 {streamer.name} · schedule", description="\n\n".join(lines)[:4096],
+                          color=PURPLE if any(e.picked for e in entries) else GREY)
+    if has_image:
+        embed.set_image(url=f"attachment://{SCHEDULE_FILENAME}")
+    embed.set_footer(text="Times are in your timezone · 💜 = on your calendar")
+    return embed
+
+
+def _options(entries: list[Entry], tz: str, picked_default: bool = False) -> list[discord.SelectOption]:
+    """Dropdown labels can't use Discord's local-time stamps, so they're written in the owner's timezone."""
+    zone = ZoneInfo(tz)
+
+    def label(e: Entry) -> str:
+        local = e.start_utc.astimezone(zone)
+        return f"{local:%a %d %b} {local:%I:%M %p}".replace(" 0", " ") + f" · {e.title}"
+    return [discord.SelectOption(label=label(e)[:100], value=str(e.id), default=picked_default and e.picked)
+            for e in entries][:25]
+
+
+def schedule_view(schedule_id: int, entries: list[Entry], tz: str) -> discord.ui.View:
+    view = discord.ui.View(timeout=None)
+    pickable = [e for e in entries if e.status == "confirmed"]
+    if pickable:
+        view.add_item(ScheduleCalendarSelect(schedule_id, pickable, tz))
+        view.add_item(ScheduleEditSelect(schedule_id, pickable, tz))
+        view.add_item(ScheduleDeleteSelect(schedule_id, pickable, tz))
+    return view
+
+
+class _OwnerSelect(_OwnerButton):
+    """Same owner check and restart survival as the buttons; entry_id holds the schedule id here."""
+
+    @classmethod
+    async def from_custom_id(cls, interaction: discord.Interaction, item: discord.ui.Select, match: re.Match):
+        bot: StreamWatch = interaction.client  # type: ignore[assignment]
+        schedule_id = int(match["id"])
+        return cls(schedule_id, [e for e in bot.db.schedule_entries(schedule_id) if e.status == "confirmed"],
+                   bot.config.owner_tz)
+
+    @staticmethod
+    def chosen(interaction: discord.Interaction) -> list[int]:
+        return [int(v) for v in interaction.data.get("values", [])]
+
+
+class ScheduleCalendarSelect(_OwnerSelect, discord.ui.DynamicItem[discord.ui.Select],
+                             template=r"sw:sched-cal:(?P<id>\d+)"):
+    def __init__(self, schedule_id: int, entries: list[Entry], tz: str):
+        options = _options(entries, tz, picked_default=True)
+        super().__init__(schedule_id, discord.ui.Select(
+            custom_id=f"sw:sched-cal:{schedule_id}", placeholder="💜 Add to calendar… (tick streams, untick to remove)",
+            min_values=0, max_values=max(1, len(options)), options=options or [discord.SelectOption(label="-")]))
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        bot: StreamWatch = interaction.client  # type: ignore[assignment]
+        await interaction.response.defer()
+        problems = await bot.set_schedule_picks(self.entry_id, set(self.chosen(interaction)))
+        if problems:
+            await interaction.followup.send("\n".join(problems), ephemeral=True)
+
+
+class ScheduleEditSelect(_OwnerSelect, discord.ui.DynamicItem[discord.ui.Select],
+                         template=r"sw:sched-edit:(?P<id>\d+)"):
+    def __init__(self, schedule_id: int, entries: list[Entry], tz: str):
+        super().__init__(schedule_id, discord.ui.Select(
+            custom_id=f"sw:sched-edit:{schedule_id}", placeholder="✏️ Edit a stream…",
+            options=_options(entries, tz) or [discord.SelectOption(label="-")]))
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        bot: StreamWatch = interaction.client  # type: ignore[assignment]
+        entry = bot.db.get_entry(self.chosen(interaction)[0])
+        if entry is None or entry.status != "confirmed":
+            await interaction.response.send_message("That stream can't be edited any more.", ephemeral=True)
+            return
+        await interaction.response.send_modal(EditEntryModal(entry, bot.db.get_streamer(entry.streamer_id)))
+
+
+class ScheduleDeleteSelect(_OwnerSelect, discord.ui.DynamicItem[discord.ui.Select],
+                           template=r"sw:sched-del:(?P<id>\d+)"):
+    def __init__(self, schedule_id: int, entries: list[Entry], tz: str):
+        super().__init__(schedule_id, discord.ui.Select(
+            custom_id=f"sw:sched-del:{schedule_id}", placeholder="🗑 Delete a stream…",
+            options=_options(entries, tz) or [discord.SelectOption(label="-")]))
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        bot: StreamWatch = interaction.client  # type: ignore[assignment]
+        await interaction.response.defer()
+        problem = await bot.delete_entry(self.chosen(interaction)[0])
+        await bot.refresh_schedule(self.entry_id)
+        if problem:
+            await interaction.followup.send(problem, ephemeral=True)

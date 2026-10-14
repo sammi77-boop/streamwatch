@@ -32,6 +32,7 @@ class Config:
     google_calendar_id: Optional[str]
     anthropic_api_key: Optional[str] = None
     images_dir: Path = ROOT / "schedule_images"
+    owner_tz: str = "America/Los_Angeles"  # for text that can't use Discord's local-time stamps (dropdown labels)
     websub_enabled: bool = False        # parked: see PRD §10 Notes. WEBSUB_ENABLED=1 turns instant alerts on
     websub_port: int = 8080
     websub_host: Optional[str] = None   # public IP/hostname for the push callback; found automatically on GCP
@@ -56,6 +57,7 @@ def load_config() -> Config:
         # M4: schedule image reading. Without it, /drop explains how to turn it on.
         anthropic_api_key=os.environ.get("ANTHROPIC_API_KEY") or None,
         websub_enabled=os.environ.get("WEBSUB_ENABLED", "").lower() in ("1", "true", "yes"),
+        owner_tz=os.environ.get("OWNER_TZ", "America/Los_Angeles"),
         websub_port=int(os.environ.get("WEBSUB_PORT", "8080")),
         websub_host=os.environ.get("WEBSUB_HOST") or None,
     )

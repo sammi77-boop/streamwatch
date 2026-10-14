@@ -36,6 +36,8 @@ class _Entry(BaseModel):
     timezone_as_written: Optional[str] = Field(
         description="The timezone label used for start_time exactly as printed (e.g. PT, JST, GMT+9), or null")
     title_as_written: str = Field(description="What the stream is, as printed (game, activity or title)")
+    subtitle_as_written: Optional[str] = Field(
+        description="The short tagline printed with the title (e.g. 'YAP THEN WE RP!'), or null")
     is_collab: bool
     collab_partners: list[str] = Field(description="Partner names or @handles if shown")
     confidence: float = Field(description="0.0-1.0: how sure you are of this entry's date and time")
@@ -72,6 +74,7 @@ Return one entry per scheduled stream. Rules:
 - A time past midnight that belongs to the previous day's slot (e.g. "Mon 1AM" after Sunday night) keeps the
   calendar date it actually happens on.
 - title_as_written: the stream's topic as printed, in its original language. Don't invent titles.
+- subtitle_as_written: the small tagline printed with that title, if any, as printed; otherwise null.
 - Mark collabs (guests, "w/", "ft.", "collab", コラボ, partner avatars with names) and list partners as printed.
 - confidence below 0.8 when text is blurry, stylised, partly hidden, or you had to guess the date or time."""
 
@@ -123,6 +126,7 @@ async def read_schedule(client: anthropic.AsyncAnthropic, model: str, images: li
     return reading.is_schedule, [
         ReadEntry(e.date, e.start_time, e.timezone_as_written, e.title_as_written.strip(), e.is_collab,
                   e.collab_partners, max(0.0, min(1.0, e.confidence)), e.slot_date,
-                  [(e.check_time.date, e.check_time.time, e.check_time.timezone)] if e.check_time else [])
+                  [(e.check_time.date, e.check_time.time, e.check_time.timezone)] if e.check_time else [],
+                  (e.subtitle_as_written or "").strip() or None)
         for e in reading.entries
     ]

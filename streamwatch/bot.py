@@ -26,7 +26,8 @@ from .parsing import CHANNEL_URL_EXAMPLE, parse_channel_url, parse_duration, sug
 from .pipeline import NeedsReview, NewImageEntry, TimezoneSuggestion, process_image
 from .tracker import Cancelled, Event, NewWaitingRoom, Rescheduled, SurpriseLive, Updated, WentLive, apply_update
 from . import websub
-from .ui import (CHANNELS, SCHEDULE_FILENAME, card_channel, ConfirmReviewButton, DeleteCardButton, DiscardReviewButton, EditCardButton,
+from .ui import (CHANNELS, SCHEDULE_FILENAME, ScheduleCalendarSelect, ScheduleDeleteSelect, ScheduleEditSelect,
+                 card_channel, schedule_embed, schedule_view, ConfirmReviewButton, DeleteCardButton, DiscardReviewButton, EditCardButton,
                  EditReviewButton, KeepTimezoneButton, PickButton, SetTimezoneButton, UnpickButton, card_embed, card_view, change_notice, live_alert,
                  review_embed, review_view, timezone_suggestion)
 from .youtube import (YouTubeError, fetch_live_video_id, fetch_rss_video_ids, fetch_videos, resolve_channel,
@@ -82,7 +83,8 @@ class StreamWatch(discord.Client):
         self.http_session = aiohttp.ClientSession()
         self.calendar = GoogleCalendar(self.http_session, self.config.google_key_path, self.config.google_calendar_id)
         self.add_dynamic_items(PickButton, UnpickButton, ConfirmReviewButton, EditReviewButton, DiscardReviewButton,
-                               SetTimezoneButton, KeepTimezoneButton, EditCardButton, DeleteCardButton)
+                               SetTimezoneButton, KeepTimezoneButton, EditCardButton, DeleteCardButton,
+                               ScheduleCalendarSelect, ScheduleEditSelect, ScheduleDeleteSelect)
         self.claude = None
         if self.config.anthropic_api_key:
             import anthropic  # only needed when image reading is turned on
@@ -306,13 +308,15 @@ class StreamWatch(discord.Client):
         image_path = self.config.images_dir / f"{streamer.id}_{now:%Y%m%d_%H%M%S}.jpg"
         image_path.write_bytes(await asyncio.to_thread(ocr.stitch, [data for data, _, _ in images]))
 
+        schedule_id = self.db.create_schedule(streamer.id, str(image_path))
         result = await process_image(self.db, streamer, [(data, mtype) for data, mtype, _ in images], read,
                                      ocr.read_text,
                                      reader.FIRST_READER, reader.SECOND_OPINION, post_date or now, now,
-                                     post_text, post_id, str(image_path))
-        cards = sorted((e for e in result.events if not isinstance(e, NeedsReview)),
-                       key=lambda e: e.entry.start_utc)
-        for event in cards:
+                                     post_text, post_id, str(image_path), schedule_id)
+        # New streams go into ONE table message; changes to streams listed before update their own tables.
+        if self.db.schedule_entries(schedule_id):
+            await self.post_schedule(schedule_id)
+        for event in (e for e in result.events if not isinstance(e, (NewImageEntry, NeedsReview))):
             await self.handle_event(streamer, event)
         for event in (e for e in result.events if isinstance(e, NeedsReview)):
             log.info("Needs review: %s at %s (%s)", event.entry.title, event.entry.start_utc, "; ".join(event.issues))
@@ -348,7 +352,10 @@ class StreamWatch(discord.Client):
             return
         entry = self.db.update_entry(entry_id, status="confirmed")
         streamer = self.db.get_streamer(entry.streamer_id)
-        await self.handle_event(streamer, NewImageEntry(entry))
+        if entry.schedule_id:
+            await self.refresh_schedule(entry.schedule_id)
+        else:
+            await self.handle_event(streamer, NewImageEntry(entry))
         if message:
             embed = review_embed(entry, streamer, [], state="confirmed")
             embed.set_image(url=message.embeds[0].image.url if message.embeds and message.embeds[0].image else None)
@@ -359,6 +366,8 @@ class StreamWatch(discord.Client):
         if entry is None or entry.status != "pending_review":
             return
         entry = self.db.update_entry(entry_id, status="discarded")
+        if entry.schedule_id:
+            await self.refresh_schedule(entry.schedule_id)
         if message:
             await message.edit(embed=review_embed(entry, self.db.get_streamer(entry.streamer_id), [],
                                                   state="discarded"), view=None, attachments=[])
@@ -479,7 +488,58 @@ class StreamWatch(discord.Client):
         except CalendarError as e:
             await self._calendar_failed(e)
 
+    # --- schedule tables in #schedule-images ---
+
+    async def schedule_message_kwargs(self, schedule_id: int) -> dict:
+        schedule = self.db.get_schedule(schedule_id)
+        streamer = self.db.get_streamer(schedule["streamer_id"])
+        entries = self.db.schedule_entries(schedule_id)
+        names = {e.id: await self.partner_names(e) for e in entries if e.is_collab}
+        has_image = bool(schedule["image_path"]) and Path(schedule["image_path"]).exists()
+        return {"embed": schedule_embed(streamer, entries, names, has_image),
+                "view": schedule_view(schedule_id, entries, self.config.owner_tz)}
+
+    async def post_schedule(self, schedule_id: int) -> None:
+        kwargs = await self.schedule_message_kwargs(schedule_id)
+        message = await self.send("schedule-images", **kwargs,
+                                  **self.schedule_file(self.db.get_schedule(schedule_id)["image_path"]))
+        if message:
+            self.db.set_schedule_message(schedule_id, message.channel.id, message.id)
+
+    async def refresh_schedule(self, schedule_id: int) -> None:
+        schedule = self.db.get_schedule(schedule_id)
+        if not schedule or not schedule["message_id"]:
+            return
+        channel = self.get_channel(schedule["channel_id"])
+        if channel is None:
+            return
+        try:
+            await channel.get_partial_message(schedule["message_id"]).edit(
+                **await self.schedule_message_kwargs(schedule_id))
+        except discord.NotFound:
+            log.info("Schedule table %s was deleted; not refreshing", schedule_id)
+
+    async def set_schedule_picks(self, schedule_id: int, selected: set[int]) -> list[str]:
+        """The calendar dropdown: ticked streams go on the calendar, unticked ones come off."""
+        problems = []
+        for entry in self.db.schedule_entries(schedule_id):
+            if entry.status != "confirmed":
+                continue
+            if entry.id in selected and not entry.picked:
+                problem = await self.pick(entry)
+            elif entry.id not in selected and entry.picked:
+                problem = await self.unpick(entry)
+            else:
+                continue
+            if problem:
+                problems.append(f"{entry.title}: {problem}")
+        await self.refresh_schedule(schedule_id)
+        return problems
+
     async def refresh_card(self, entry: Entry, streamer: Streamer) -> None:
+        if entry.schedule_id:
+            await self.refresh_schedule(entry.schedule_id)
+            return
         if not (entry.card_channel_id and entry.card_message_id):
             return
         channel = self.get_channel(entry.card_channel_id)

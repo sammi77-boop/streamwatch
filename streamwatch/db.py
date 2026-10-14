@@ -51,11 +51,22 @@ CREATE TABLE IF NOT EXISTS entries (
     status          TEXT NOT NULL DEFAULT 'confirmed',  -- pending_review | confirmed | cancelled | discarded
     orig_tz         TEXT,                   -- timezone an image entry's time was written in
     image_path      TEXT,                   -- saved schedule image, shown on the card
+    schedule_id     INTEGER REFERENCES schedules(id),  -- the schedule table message this stream is listed in
+    subtitle        TEXT,                   -- tagline under the title on the image
     review_message_id INTEGER,
     previous_start  TEXT,
     card_channel_id INTEGER,
     card_message_id INTEGER,
     created_at      TEXT NOT NULL
+);
+-- One dropped schedule (one or more images) shown as a single table message in #schedule-images.
+CREATE TABLE IF NOT EXISTS schedules (
+    id          INTEGER PRIMARY KEY,
+    streamer_id INTEGER NOT NULL REFERENCES streamers(id),
+    image_path  TEXT,
+    channel_id  INTEGER,
+    message_id  INTEGER,
+    created_at  TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS picks (
     entry_id      INTEGER PRIMARY KEY REFERENCES entries(id),
@@ -83,6 +94,8 @@ MIGRATIONS = [
     ("entries", "review_message_id", "INTEGER"),
     ("entries", "image_path", "TEXT"),
     ("streamers", "reading_notes", "TEXT"),
+    ("entries", "schedule_id", "INTEGER"),
+    ("entries", "subtitle", "TEXT"),
 ]
 
 PAUSED_FOREVER = "forever"
@@ -132,6 +145,8 @@ class Entry:
     confidence: Optional[float] = None
     review_message_id: Optional[int] = None
     image_path: Optional[str] = None
+    schedule_id: Optional[int] = None
+    subtitle: Optional[str] = None
 
 
 def _now() -> datetime:
@@ -264,12 +279,14 @@ class Database:
     def create_entry(self, streamer_id: int, start_utc: datetime, title: str, source: str,
                      video_id: Optional[str] = None, is_collab: bool = False, partners: list = (),
                      status: str = "confirmed", orig_tz: Optional[str] = None, confidence: Optional[float] = None,
-                     post_id: Optional[str] = None, image_path: Optional[str] = None) -> Entry:
+                     post_id: Optional[str] = None, image_path: Optional[str] = None,
+                     schedule_id: Optional[int] = None, subtitle: Optional[str] = None) -> Entry:
         cur = self.conn.execute(
             "INSERT INTO entries (streamer_id, start_utc, title, source, video_id, is_collab, partners_json, status, "
-            "orig_tz, confidence, post_id, image_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "orig_tz, confidence, post_id, image_path, schedule_id, subtitle, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (streamer_id, start_utc.isoformat(), title, source, video_id, int(is_collab), json.dumps(list(partners)),
-             status, orig_tz, confidence, post_id, image_path, _now().isoformat()),
+             status, orig_tz, confidence, post_id, image_path, schedule_id, subtitle, _now().isoformat()),
         )
         self.conn.commit()
         return self.get_entry(cur.lastrowid)
@@ -298,6 +315,28 @@ class Database:
         self.conn.execute(f"UPDATE entries SET {assignments} WHERE id = ?", (*values, entry_id))
         self.conn.commit()
         return self.get_entry(entry_id)
+
+    # --- schedule tables (one message per dropped schedule) ---
+
+    def create_schedule(self, streamer_id: int, image_path: Optional[str]) -> int:
+        cur = self.conn.execute("INSERT INTO schedules (streamer_id, image_path, created_at) VALUES (?, ?, ?)",
+                                (streamer_id, image_path, _now().isoformat()))
+        self.conn.commit()
+        return cur.lastrowid
+
+    def get_schedule(self, schedule_id: int) -> Optional[sqlite3.Row]:
+        return self.conn.execute("SELECT * FROM schedules WHERE id = ?", (schedule_id,)).fetchone()
+
+    def set_schedule_message(self, schedule_id: int, channel_id: int, message_id: int) -> None:
+        self.conn.execute("UPDATE schedules SET channel_id = ?, message_id = ? WHERE id = ?",
+                          (channel_id, message_id, schedule_id))
+        self.conn.commit()
+
+    def schedule_entries(self, schedule_id: int) -> list[Entry]:
+        """Streams listed in a schedule table, in time order (discarded ones left out)."""
+        rows = self.conn.execute("SELECT id FROM entries WHERE schedule_id = ? AND status != 'discarded' "
+                                 "ORDER BY start_utc", (schedule_id,)).fetchall()
+        return [self.get_entry(r["id"]) for r in rows]
 
     def entries_for_streamer(self, streamer_id: int, statuses=("confirmed",), unlinked_only: bool = False
                              ) -> list[Entry]:
@@ -409,4 +448,4 @@ def _to_entry(row: sqlite3.Row) -> Entry:
                  row["status"], _dt(row["previous_start"]), row["card_channel_id"], row["card_message_id"],
                  bool(row["picked"]), bool(row["is_collab"]), json.loads(row["partners_json"] or "[]"),
                  row["calendar_id"], row["gcal_event_id"], row["orig_tz"], row["confidence"],
-                 row["review_message_id"], row["image_path"])
+                 row["review_message_id"], row["image_path"], row["schedule_id"], row["subtitle"])

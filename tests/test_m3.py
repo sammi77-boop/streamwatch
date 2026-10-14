@@ -164,3 +164,59 @@ class CalendarFlowTest(unittest.IsolatedAsyncioTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ScheduleTableTest(unittest.IsolatedAsyncioTestCase):
+    """One table per dropped schedule, with the calendar dropdown syncing picks."""
+
+    async def asyncSetUp(self):
+        fd, self.path = tempfile.mkstemp(suffix=".db")
+        os.close(fd)
+        config = Config("x", 1, 42, "k", "America/Los_Angeles", self.path, Path("/nonexistent"), "cal@group")
+        self.bot = StreamWatch(config)
+        self.bot.calendar = FakeCalendar()
+
+        async def fake_send(channel_name, **kwargs):
+            pass
+        self.bot.send = fake_send
+        self.db = self.bot.db
+        self.streamer, _ = self.db.add_streamer("UCr", "@rosco", "Rosco", "America/New_York")
+        self.schedule_id = self.db.create_schedule(self.streamer.id, None)
+        mk = lambda days, title, sub, **kw: self.db.create_entry(
+            self.streamer.id, START + timedelta(days=days), title, "image", schedule_id=self.schedule_id,
+            subtitle=sub, orig_tz="JST", **kw)
+        self.day6 = mk(1, "FIRST STAGE FABLES | DAY 6", "READY TO ROCK AND ROLLO!")
+        self.day7 = mk(2, "FIRST STAGE FABLES | DAY 7", None, is_collab=True, partners=["Juno", "Millie"])
+        self.d9 = mk(4, "FIRST STAGE FABLES | D9", "TICK-TOCK", status="pending_review")
+
+    async def asyncTearDown(self):
+        self.db.conn.close()
+        os.remove(self.path)
+
+    async def test_dropdown_adds_and_removes_calendar_events(self):
+        self.assertEqual(await self.bot.set_schedule_picks(self.schedule_id, {self.day6.id, self.day7.id}), [])
+        self.assertEqual(len(self.bot.calendar.events), 2)
+        self.assertTrue(self.db.get_entry(self.day7.id).picked)
+        await self.bot.set_schedule_picks(self.schedule_id, {self.day7.id})  # untick Day 6
+        self.assertFalse(self.db.get_entry(self.day6.id).picked)
+        self.assertEqual(len(self.bot.calendar.events), 1)
+        await self.bot.set_schedule_picks(self.schedule_id, {self.d9.id})  # pending entries can't be picked
+        self.assertFalse(self.db.get_entry(self.d9.id).picked)
+
+    async def test_table_lines(self):
+        from streamwatch.ui import schedule_embed, schedule_view
+        self.db.set_picked(self.day6.id, True)
+        entries = self.db.schedule_entries(self.schedule_id)
+        text = schedule_embed(self.streamer, entries, {self.day7.id: ["Juno", "Millie"]}, False).description
+        self.assertIn("**FIRST STAGE FABLES | DAY 6** · *READY TO ROCK AND ROLLO!* 💜", text)
+        self.assertIn("🤝 *with Juno, Millie*", text)
+        self.assertIn("⏳ *check in #needs-review*", text)
+        self.assertIn(f"<t:{int(START.timestamp()) + 86400}:F>", text)  # Discord shows it in local time
+        self.assertNotIn("🤝", text.split("DAY 7")[0])  # only collabs get a partner line
+        view = schedule_view(self.schedule_id, entries, "America/Los_Angeles")
+        placeholders = [c.item.placeholder for c in view.children]
+        self.assertEqual(len(placeholders), 3)
+        calendar = view.children[0].item
+        self.assertEqual(len(calendar.options), 2)  # pending D9 isn't offered yet
+        self.assertEqual([o.default for o in calendar.options], [True, False])
+        self.assertTrue(calendar.options[0].label.startswith("Thu 15 Oct 1:00 PM"))  # 20:00 UTC in PDT

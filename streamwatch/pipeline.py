@@ -73,7 +73,7 @@ class ImageResult:
 async def process_image(db: Database, streamer: Streamer, images: list[tuple[bytes, str]], read: ReadFn,
                         ocr: OcrFn, first_model: str, second_model: str, post_date: datetime, now: datetime,
                         post_text: str = "", post_id: Optional[str] = None,
-                        image_path: Optional[str] = None) -> ImageResult:
+                        image_path: Optional[str] = None, schedule_id: Optional[int] = None) -> ImageResult:
     """One schedule, possibly split across several images (e.g. a post with two halves).
 
     image_path is the saved (stitched) schedule image that cards show."""
@@ -96,7 +96,7 @@ async def process_image(db: Database, streamer: Streamer, images: list[tuple[byt
             log.warning("Second opinion failed: %s", e)
 
     for c in checked:
-        await _place(db, streamer, c, now, post_id, image_path, result)
+        await _place(db, streamer, c, now, post_id, image_path, schedule_id, result)
     result.suggestion = _timezone_suggestion(db, streamer, checked)
     return result
 
@@ -118,7 +118,7 @@ def _merge_readings(first: list[CheckedEntry], second: list[CheckedEntry]) -> li
 
 
 async def _place(db: Database, streamer: Streamer, c: CheckedEntry, now: datetime, post_id: Optional[str],
-                 image_path: Optional[str], result: ImageResult) -> None:
+                 image_path: Optional[str], schedule_id: Optional[int], result: ImageResult) -> None:
     issues = list(c.issues)
     start, tz_label = c.start_utc, c.tz_name
     if start is None:
@@ -156,7 +156,8 @@ async def _place(db: Database, streamer: Streamer, c: CheckedEntry, now: datetim
     status = "confirmed" if not issues else "pending_review"
     entry = db.create_entry(streamer.id, start, c.read.title, "image", is_collab=c.read.is_collab,
                             partners=c.read.partners, status=status, orig_tz=tz_label,
-                            confidence=c.read.confidence, post_id=post_id, image_path=image_path)
+                            confidence=c.read.confidence, post_id=post_id, image_path=image_path,
+                            schedule_id=schedule_id, subtitle=c.read.subtitle)
     result.events.append(NewImageEntry(entry) if not issues else NeedsReview(entry, issues))
 
 

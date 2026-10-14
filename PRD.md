@@ -82,7 +82,7 @@ Private server, single member (me). Channels:
 |---|---|
 | `#weekly-schedule` | The Sunday 20:00 digest of the coming Mon–Sun. |
 | `#waiting-rooms` | A card for each stream found from a YouTube waiting room. Tapping **Add to calendar** puts it on my calendar. |
-| `#schedule-images` | A card for each stream read from a schedule image (`/drop`, later community posts), with the image, Edit and Delete. |
+| `#schedule-images` | ONE table message per dropped schedule: each stream's time (in my timezone), title and subtitle, and collab partners if it's a collab; the schedule image; and dropdowns to add streams to the calendar, edit one, or delete one. |
 | `#go-live` | 💜 Pings me when a stream I picked goes live |
 | `#surprise-live` | ❣️ Pings me when a followed streamer goes live without announcing it |
 | `#needs-review` | Schedule entries the bot couldn't read confidently. Confirm, fix or discard them. |

@@ -25,6 +25,7 @@ class ReadEntry:
     confidence: float = 1.0
     slot_date: Optional[str] = None  # the day/column it's listed under; differs from date when tz rows got mixed
     other_times: list = field(default_factory=list)  # [(date, time, tz)]: same stream in other printed timezones
+    subtitle: Optional[str] = None  # tagline under the title, e.g. "YAP THEN WE RP!"
 
 
 @dataclass
