@@ -262,25 +262,61 @@ class EditReviewButton(_OwnerButton, discord.ui.DynamicItem[discord.ui.Button], 
         await interaction.response.send_modal(EditEntryModal(entry, bot.db.get_streamer(entry.streamer_id)))
 
 
+EDIT_TIMEZONES = [  # (label shown, value understood by resolve_timezone)
+    ("PT · US Pacific", "America/Los_Angeles"), ("MT · US Mountain", "America/Denver"),
+    ("CT · US Central", "America/Chicago"), ("ET · US Eastern", "America/New_York"),
+    ("UTC / GMT", "UTC"), ("UK · London", "Europe/London"), ("Central Europe · Berlin, Paris", "Europe/Berlin"),
+    ("JST · Japan", "Asia/Tokyo"), ("KST · Korea", "Asia/Seoul"), ("Taiwan · Taipei", "Asia/Taipei"),
+    ("China · Shanghai", "Asia/Shanghai"), ("SGT · Singapore", "Asia/Singapore"),
+    ("PHT · Philippines", "Asia/Manila"), ("Indonesia · Jakarta", "Asia/Jakarta"),
+    ("AEST · Sydney", "Australia/Sydney"), ("NZ · Auckland", "Pacific/Auckland"),
+]
+
+
+def _tz_value(label: str, home_tz: str) -> str:
+    """The dropdown value matching a stored timezone label like 'EDT' or 'Asia/Tokyo'."""
+    tz, _, _ = resolve_timezone(label, home_tz)
+    return getattr(tz, "key", None) or label
+
+
 class EditEntryModal(discord.ui.Modal, title="Fix this stream"):
+    """Date and title are typed; hour, minute and timezone are picked from dropdowns."""
+
     def __init__(self, entry: Entry, streamer: Streamer):
         super().__init__(timeout=600)
         self.entry_id = entry.id
         self.home_tz = streamer.home_tz
-        tz_label = entry.orig_tz or streamer.home_tz
-        tz, _, _ = resolve_timezone(tz_label, streamer.home_tz)
+        current_tz = _tz_value(entry.orig_tz or streamer.home_tz, streamer.home_tz)
+        tz, _, _ = resolve_timezone(current_tz, streamer.home_tz)
         local = entry.start_utc.astimezone(tz)
-        self.day = discord.ui.TextInput(label="Date (YYYY-MM-DD)", default=f"{local:%Y-%m-%d}", max_length=10)
-        self.time = discord.ui.TextInput(label="Start time (24h HH:MM)", default=f"{local:%H:%M}", max_length=5)
-        self.tz = discord.ui.TextInput(label="Timezone (e.g. PT, JST, Asia/Tokyo)", default=tz_label, max_length=40)
-        self.name = discord.ui.TextInput(label="Title", default=entry.title[:200], max_length=200)
-        for item in (self.day, self.time, self.tz, self.name):
-            self.add_item(item)
+
+        self.day = discord.ui.TextInput(default=f"{local:%Y-%m-%d}", min_length=10, max_length=10)
+        self.hour = discord.ui.Select(options=[
+            discord.SelectOption(label=f"{h:02d}  ({(h % 12) or 12} {'AM' if h < 12 else 'PM'})", value=f"{h:02d}",
+                                 default=(h == local.hour)) for h in range(24)])
+        minutes = sorted({0, 15, 30, 45, local.minute})
+        self.minute = discord.ui.Select(options=[
+            discord.SelectOption(label=f":{m:02d}", value=f"{m:02d}", default=(m == local.minute)) for m in minutes])
+        zones = list(EDIT_TIMEZONES)
+        if streamer.home_tz not in [v for _, v in zones]:
+            zones.insert(0, (f"Home · {streamer.home_tz}", streamer.home_tz))
+        if current_tz not in [v for _, v in zones]:
+            zones.insert(0, (f"As written · {current_tz}", current_tz))
+        self.tz = discord.ui.Select(options=[
+            discord.SelectOption(label=label[:100], value=value, default=(value == current_tz))
+            for label, value in zones[:25]])
+        self.name = discord.ui.TextInput(default=entry.title[:200], max_length=200)
+
+        self.add_item(discord.ui.Label(text="Date (YYYY-MM-DD)", component=self.day))
+        self.add_item(discord.ui.Label(text="Start hour", component=self.hour))
+        self.add_item(discord.ui.Label(text="Minute", component=self.minute))
+        self.add_item(discord.ui.Label(text="Timezone the time is in", component=self.tz))
+        self.add_item(discord.ui.Label(text="Title", component=self.name))
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
         bot: StreamWatch = interaction.client  # type: ignore[assignment]
-        fixed = ReadEntry(self.day.value.strip(), self.time.value.strip(), self.tz.value.strip(),
-                          self.name.value.strip())
+        fixed = ReadEntry(self.day.value.strip(), f"{self.hour.values[0]}:{self.minute.values[0]}",
+                          self.tz.values[0], self.name.value.strip())
         start, label, problems = to_utc(fixed, self.home_tz)
         if problems:
             await interaction.response.send_message(f"⚠️ {problems[0]}. Nothing was changed; try Edit again.",
