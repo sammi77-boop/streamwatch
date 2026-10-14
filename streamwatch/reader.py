@@ -39,8 +39,8 @@ class _Entry(BaseModel):
     is_collab: bool
     collab_partners: list[str] = Field(description="Partner names or @handles if shown")
     confidence: float = Field(description="0.0-1.0: how sure you are of this entry's date and time")
-    other_times: list[_TimeRow] = Field(
-        description="The same stream's time in every OTHER timezone printed for it (empty if only one)")
+    check_time: Optional[_TimeRow] = Field(
+        description="The same stream in ONE other printed timezone, used only to confirm the date; null if only one")
 
 
 class _Reading(BaseModel):
@@ -53,21 +53,22 @@ Return one entry per scheduled stream. Rules:
 - Skip days marked off, rest, no stream, TBA/TBD without a time, or crossed out.
 - Dates: resolve to real calendar dates. Schedules are usually for the week the post was made in or the week after;
   use the post date and any dates printed on the image. Weekday-only schedules start on or after the post date.
-- Times: when several timezones are printed for a stream, use the one whose day matches the day/column the stream
-  is listed under: the row WITHOUT a day marker such as "(FRI)", "(M)", "+1" or "next day". That is usually the
-  streamer's own timezone. Give start_time in 24-hour HH:MM in that timezone and its label in timezone_as_written.
-  Example: under "15th of October, THU": JST 07:00 (FRI) / EDT 6:00 PM / PDT 3:00 PM → date 2026-10-15,
-  start_time 18:00, timezone_as_written EDT (the first row without a marker). Never pair one timezone's time with
-  another timezone's date. If no timezone is printed anywhere, use null.
+- Times: if a JST row is printed, ALWAYS use the JST row: start_time is its time (24-hour HH:MM),
+  timezone_as_written is "JST", and date is the day it happens in Japan. Apply its day marker ("07:00 (FRI)" means
+  Friday). When the columns are dated in another timezone (e.g. US), a JST time is often the NEXT day even without
+  a marker, so work the JST date out from the other row. Never pair the JST time with another row's date.
+  Example: under "15th of October, THU": JST 07:00 (FRI) / EDT 6:00 PM / PDT 3:00 PM → date 2026-10-16,
+  start_time 07:00, timezone_as_written JST, check_time {EDT, 2026-10-15, 18:00}.
+  If no JST row is printed, use the row whose day matches the column (no day marker), usually the streamer's own
+  timezone. If no timezone is printed anywhere, use null.
 - Two times on one row separated by "|" (e.g. "6 PM | 9 PM"):
   * if the slot shows two titles (e.g. "BACK N' FORTH" and "#FSFABLES | DAY 3"), they are TWO streams: the first
     title at the first time, the second title at the second time. Return two entries.
   * if the slot shows one title, it's one stream: use the first time.
   A range written with "-" or "~" (e.g. "8PM-11PM") is start and end of one stream.
-- other_times: list every other timezone row printed for that stream, each with its own date in that timezone
-  (apply its day marker: "07:00 (FRI)" under a THU column means Friday's date).
-- slot_date is the date printed for that day/column. date must be the day the stream starts in
-  timezone_as_written; it normally equals slot_date.
+- check_time: just ONE other printed row for the same stream (prefer the one matching the column, no day marker),
+  with its own date and time. Don't read or list any further timezone rows. null if only one timezone is printed.
+- slot_date is the date printed for that day/column (may differ from date when the JST row is the next day).
 - A time past midnight that belongs to the previous day's slot (e.g. "Mon 1AM" after Sunday night) keeps the
   calendar date it actually happens on.
 - title_as_written: the stream's topic as printed, in its original language. Don't invent titles.
@@ -122,6 +123,6 @@ async def read_schedule(client: anthropic.AsyncAnthropic, model: str, images: li
     return reading.is_schedule, [
         ReadEntry(e.date, e.start_time, e.timezone_as_written, e.title_as_written.strip(), e.is_collab,
                   e.collab_partners, max(0.0, min(1.0, e.confidence)), e.slot_date,
-                  [(r.date, r.time, r.timezone) for r in e.other_times])
+                  [(e.check_time.date, e.check_time.time, e.check_time.timezone)] if e.check_time else [])
         for e in reading.entries
     ]

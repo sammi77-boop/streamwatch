@@ -110,6 +110,34 @@ class RealRoscoReadingTest(unittest.TestCase):
                       " ".join(cross_check(bug, "THU 15 JST 07:00 (FRI) EDT 6:00 PM PDT 3:00 PM", "UTC").issues))
 
 
+class JstFirstTest(unittest.TestCase):
+    """Owner's rule: read the JST row when printed, with one other row only to confirm the date."""
+    OCR = "15TH OF OCTOBER, THU FIRST STAGE FABLES | DAY 6 JST 07:00 (FRI) EDT 6:00 PM PDT 3:00 PM"
+
+    def test_jst_next_day_confirmed_by_check_row(self):
+        day6 = ReadEntry("2026-10-16", "07:00", "JST", "DAY 6", slot_date="2026-10-15",
+                         other_times=[("2026-10-15", "18:00", "EDT")])
+        checked = cross_check(day6, self.OCR, "America/New_York")
+        self.assertTrue(checked.ok, checked.issues)
+        self.assertEqual(checked.start_utc, datetime(2026, 10, 15, 22, 0, tzinfo=timezone.utc))  # Thu 3 PM PT
+
+    def test_jst_paired_with_column_date_is_caught(self):
+        wrong = ReadEntry("2026-10-15", "07:00", "JST", "DAY 6", slot_date="2026-10-15",
+                          other_times=[("2026-10-15", "18:00", "EDT")])
+        self.assertIn("timezones disagree", " ".join(cross_check(wrong, self.OCR, "America/New_York").issues))
+
+    def test_unmarked_jst_row_a_day_early_is_caught(self):
+        # Rosco's Day 5: "JST 07:00 | 14:00" under WED 14 with no (THU) marker; it's really Thu 15 in Japan
+        early = ReadEntry("2026-10-14", "07:00", "JST", "LOVEBYTE.EXE", slot_date="2026-10-14",
+                          other_times=[("2026-10-14", "18:00", "EDT")])
+        self.assertIn("timezones disagree", " ".join(cross_check(early, "WED 14 JST 07:00 | 14:00 EDT 6 PM",
+                                                                 "America/New_York").issues))
+
+    def test_jst_without_check_row_off_its_column_goes_to_review(self):
+        alone = ReadEntry("2026-10-16", "07:00", "JST", "DAY 6", slot_date="2026-10-15")
+        self.assertIn("differs from the day", " ".join(cross_check(alone, self.OCR, "UTC").issues))
+
+
 class MatchingTest(unittest.TestCase):
     class C:
         def __init__(self, start, title):
@@ -279,6 +307,19 @@ class PipelineTest(unittest.IsolatedAsyncioTestCase):
         # Karaoke: first reader was right; Minecraft: second reader was right. Both become cards.
         self.assertEqual([type(e) for e in result.events], [NewImageEntry, NewImageEntry])
         self.assertEqual([e.entry.start_utc.hour for e in result.events], [0, 4])
+
+    async def test_jst_reading_suggests_the_check_rows_timezone_not_tokyo(self):
+        jst = [ReadEntry("2026-10-16", "07:00", "JST", "DAY 6", False, [], 0.95, "2026-10-15",
+                         [("2026-10-15", "18:00", "EDT")])]
+
+        async def ocr(image):
+            return "THU 15 JST 07:00 (FRI) EDT 6:00 PM"
+        self.streamer = self.db.get_streamer(self.db.add_streamer("UC3", "@r", "Rosco", "Asia/Tokyo")[0].id)
+        result = await process_image(self.db, self.streamer, [(b"i", "image/png")], self.reader(jst), ocr,
+                                     "A", "B", NOW, NOW)
+        self.assertIsInstance(result.events[0], NewImageEntry)
+        self.assertEqual(result.events[0].entry.orig_tz, "JST")
+        self.assertEqual(result.suggestion.iana, "America/New_York")
 
     async def test_not_a_schedule(self):
         async def read(*args):

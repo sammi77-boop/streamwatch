@@ -165,8 +165,9 @@ def cross_check(entry: ReadEntry, ocr_text: str, home_tz: str) -> CheckedEntry:
             issues.append(f"time {entry.start_time} not found by OCR")
         if not date_in_text(date.fromisoformat(entry.date), ocr_text):
             issues.append(f"date {entry.date} not found by OCR")
-    if entry.slot_date and entry.slot_date != entry.date:
-        # e.g. the JST time "07:00 (FRI)" was used under a THU column: likely a day off, so ask.
+    if entry.slot_date and entry.slot_date != entry.date and not (start_utc is not None and entry.other_times
+                                                                  and not any("timezones disagree" in i for i in issues)):
+        # A date off its column is fine when the check row confirms it (JST is often the next day); otherwise ask.
         issues.append(f"date {entry.date} differs from the day it's listed under ({entry.slot_date})")
     if entry.confidence < MIN_CONFIDENCE:
         issues.append(f"low confidence ({entry.confidence:.0%})")
