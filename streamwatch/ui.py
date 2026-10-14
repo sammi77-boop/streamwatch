@@ -196,7 +196,7 @@ def written_time(entry: Entry) -> Optional[str]:
     """The time as printed on the schedule image, e.g. 'Fri 9:00 PM PT (as written)'."""
     if not entry.orig_tz or entry.source == "waiting_room":
         return None
-    tz, _, problem = resolve_timezone(entry.orig_tz, "UTC")
+    tz, _, problem = resolve_timezone(entry.orig_tz)
     if problem:
         return None
     local = entry.start_utc.astimezone(tz)
@@ -267,7 +267,7 @@ class EditReviewButton(_OwnerButton, discord.ui.DynamicItem[discord.ui.Button], 
         if entry is None or entry.status != "pending_review":
             await interaction.response.send_message("This one was already handled.", ephemeral=True)
             return
-        await interaction.response.send_modal(EditEntryModal(entry, bot.db.get_streamer(entry.streamer_id)))
+        await interaction.response.send_modal(EditEntryModal(entry, bot.config.owner_tz))
 
 
 EDIT_TIMEZONES = [  # (label shown, value understood by resolve_timezone)
@@ -281,21 +281,21 @@ EDIT_TIMEZONES = [  # (label shown, value understood by resolve_timezone)
 ]
 
 
-def _tz_value(label: str, home_tz: str) -> str:
+def _tz_value(label: str) -> str:
     """The dropdown value matching a stored timezone label like 'EDT' or 'Asia/Tokyo'."""
-    tz, _, _ = resolve_timezone(label, home_tz)
+    tz, _, _ = resolve_timezone(label)
     return getattr(tz, "key", None) or label
 
 
 class EditEntryModal(discord.ui.Modal, title="Fix this stream"):
     """Date and title are typed; hour, minute and timezone are picked from dropdowns."""
 
-    def __init__(self, entry: Entry, streamer: Streamer):
+    def __init__(self, entry: Entry, owner_tz: str):
+        """The timezone dropdown starts on the one written on the image, or the owner's if none was printed."""
         super().__init__(timeout=600)
         self.entry_id = entry.id
-        self.home_tz = streamer.home_tz
-        current_tz = _tz_value(entry.orig_tz or streamer.home_tz, streamer.home_tz)
-        tz, _, _ = resolve_timezone(current_tz, streamer.home_tz)
+        current_tz = _tz_value(entry.orig_tz or owner_tz)
+        tz, _, _ = resolve_timezone(current_tz)
         local = entry.start_utc.astimezone(tz)
 
         self.day = discord.ui.TextInput(default=f"{local:%Y-%m-%d}", min_length=10, max_length=10)
@@ -306,8 +306,6 @@ class EditEntryModal(discord.ui.Modal, title="Fix this stream"):
         self.minute = discord.ui.Select(options=[
             discord.SelectOption(label=f":{m:02d}", value=f"{m:02d}", default=(m == local.minute)) for m in minutes])
         zones = list(EDIT_TIMEZONES)
-        if streamer.home_tz not in [v for _, v in zones]:
-            zones.insert(0, (f"Home · {streamer.home_tz}", streamer.home_tz))
         if current_tz not in [v for _, v in zones]:
             zones.insert(0, (f"As written · {current_tz}", current_tz))
         self.tz = discord.ui.Select(options=[
@@ -325,7 +323,7 @@ class EditEntryModal(discord.ui.Modal, title="Fix this stream"):
         bot: StreamWatch = interaction.client  # type: ignore[assignment]
         fixed = ReadEntry(self.day.value.strip(), f"{self.hour.values[0]}:{self.minute.values[0]}",
                           self.tz.values[0], self.name.value.strip())
-        start, label, problems = to_utc(fixed, self.home_tz)
+        start, label, problems = to_utc(fixed)
         if problems:
             await interaction.response.send_message(f"⚠️ {problems[0]}. Nothing was changed; try Edit again.",
                                                     ephemeral=True)
@@ -349,7 +347,7 @@ class EditCardButton(_OwnerButton, discord.ui.DynamicItem[discord.ui.Button], te
         if entry is None or entry.status != "confirmed":
             await interaction.response.send_message("This stream can't be edited any more.", ephemeral=True)
             return
-        await interaction.response.send_modal(EditEntryModal(entry, bot.db.get_streamer(entry.streamer_id)))
+        await interaction.response.send_modal(EditEntryModal(entry, bot.config.owner_tz))
 
 
 class DeleteCardButton(_OwnerButton, discord.ui.DynamicItem[discord.ui.Button], template=r"sw:card-del:(?P<id>\d+)"):
@@ -367,49 +365,6 @@ class DeleteCardButton(_OwnerButton, discord.ui.DynamicItem[discord.ui.Button], 
             pass
         if problem:
             await interaction.followup.send(problem, ephemeral=True)
-
-
-# --- timezone suggestion (asked once per streamer and timezone) ---
-
-class SetTimezoneButton(_OwnerButton, discord.ui.DynamicItem[discord.ui.Button],
-                        template=r"sw:tz:(?P<id>\d+):(?P<tz>[A-Za-z_/+\-0-9]+)"):
-    def __init__(self, streamer_id: int, iana: str):
-        super().__init__(streamer_id, discord.ui.Button(label=f"Set to {iana}", style=discord.ButtonStyle.primary,
-                                                        custom_id=f"sw:tz:{streamer_id}:{iana}"))
-        self.iana = iana
-
-    @classmethod
-    async def from_custom_id(cls, interaction: discord.Interaction, item: discord.ui.Button, match: re.Match):
-        return cls(int(match["id"]), match["tz"])
-
-    async def callback(self, interaction: discord.Interaction) -> None:
-        bot: StreamWatch = interaction.client  # type: ignore[assignment]
-        streamer = bot.db.get_streamer(self.entry_id)
-        bot.db.set_home_tz(streamer.id, self.iana)
-        await interaction.response.edit_message(
-            content=f"🕒 **{streamer.name}**'s home timezone is now `{self.iana}` (was `{streamer.home_tz}`).",
-            view=None)
-
-
-class KeepTimezoneButton(_OwnerButton, discord.ui.DynamicItem[discord.ui.Button], template=r"sw:tz-keep:(?P<id>\d+)"):
-    def __init__(self, streamer_id: int):
-        super().__init__(streamer_id, discord.ui.Button(label="Keep", style=discord.ButtonStyle.secondary,
-                                                        custom_id=f"sw:tz-keep:{streamer_id}"))
-
-    async def callback(self, interaction: discord.Interaction) -> None:
-        bot: StreamWatch = interaction.client  # type: ignore[assignment]
-        streamer = bot.db.get_streamer(self.entry_id)
-        await interaction.response.edit_message(
-            content=f"🕒 Kept **{streamer.name}**'s home timezone as `{streamer.home_tz}`.", view=None)
-
-
-def timezone_suggestion(streamer: Streamer, written: str, iana: str) -> dict:
-    view = discord.ui.View(timeout=None)
-    view.add_item(SetTimezoneButton(streamer.id, iana))
-    view.add_item(KeepTimezoneButton(streamer.id))
-    return {"content": (f"🕒 **{streamer.name}**'s schedule uses **{written}**, but their home timezone is "
-                        f"`{streamer.home_tz}`. The home timezone is only used for images that show no timezone."),
-            "view": view}
 
 
 # --- #schedule-images: one table message per dropped schedule ---
@@ -506,7 +461,7 @@ class ScheduleEditSelect(_OwnerSelect, discord.ui.DynamicItem[discord.ui.Select]
         if entry is None or entry.status != "confirmed":
             await interaction.response.send_message("That stream can't be edited any more.", ephemeral=True)
             return
-        await interaction.response.send_modal(EditEntryModal(entry, bot.db.get_streamer(entry.streamer_id)))
+        await interaction.response.send_modal(EditEntryModal(entry, bot.config.owner_tz))
 
 
 class ScheduleDeleteSelect(_OwnerSelect, discord.ui.DynamicItem[discord.ui.Select],

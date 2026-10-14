@@ -107,7 +107,7 @@ class Streamer:
     channel_id: str
     handle: Optional[str]
     name: str
-    home_tz: str
+    home_tz: str  # unused since 2026-10-14: times come from waiting rooms or the timezone printed on images
     active: bool
     bootstrapped: bool = False
     reading_notes: Optional[str] = None
@@ -177,7 +177,8 @@ class Database:
 
     # --- streamers (F-1, F-2) ---
 
-    def add_streamer(self, channel_id: str, handle: Optional[str], name: str, home_tz: str) -> tuple[Streamer, bool]:
+    def add_streamer(self, channel_id: str, handle: Optional[str], name: str, home_tz: str = "UTC"
+                     ) -> tuple[Streamer, bool]:
         """Insert or reactivate a streamer. Returns (streamer, created)."""
         name = name.strip()
         existing = self.get_streamer_by_channel(channel_id)
@@ -216,10 +217,6 @@ class Database:
 
     def deactivate_streamer(self, streamer_id: int) -> None:
         self.conn.execute("UPDATE streamers SET active = 0 WHERE id = ?", (streamer_id,))
-        self.conn.commit()
-
-    def set_home_tz(self, streamer_id: int, home_tz: str) -> None:
-        self.conn.execute("UPDATE streamers SET home_tz = ? WHERE id = ?", (home_tz, streamer_id))
         self.conn.commit()
 
     def set_reading_notes(self, streamer_id: int, notes: Optional[str]) -> None:

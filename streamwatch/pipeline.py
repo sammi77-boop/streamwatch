@@ -3,14 +3,12 @@
 from __future__ import annotations
 
 import logging
-from collections import Counter
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Awaitable, Callable, Optional
 
 from .db import Database, Entry, Streamer
-from .schedule import (TZ_ABBREVIATIONS, CheckedEntry, ReadEntry, best_match, cross_check, resolve_timezone,
-                       title_similarity, to_utc)
+from .schedule import CheckedEntry, ReadEntry, best_match, cross_check, title_similarity, to_utc
 from .tracker import Event, Rescheduled, Updated
 
 log = logging.getLogger("streamwatch.pipeline")
@@ -19,7 +17,7 @@ PAST_GRACE = timedelta(hours=3)
 TOO_FAR = timedelta(days=21)
 RESCHEDULE_TOLERANCE = timedelta(minutes=1)
 
-# (model, images [(bytes, media_type)], streamer_name, home_tz, post_date, post_text) -> (is_schedule, entries)
+# (model, images [(bytes, media_type)], streamer_name, post_date, post_text) -> (is_schedule, entries)
 ReadFn = Callable[..., Awaitable[tuple[bool, list[ReadEntry]]]]
 OcrFn = Callable[[bytes], Awaitable[str]]
 
@@ -36,20 +34,12 @@ class NeedsReview:
 
 
 @dataclass
-class TimezoneSuggestion:
-    streamer: Streamer
-    written: str        # label as printed, e.g. JST
-    iana: str           # e.g. Asia/Tokyo
-
-
-@dataclass
 class ImageResult:
     is_schedule: bool = True
     events: list = field(default_factory=list)
     skipped_past: int = 0
     duplicates: int = 0
     used_second_opinion: bool = False
-    suggestion: Optional[TimezoneSuggestion] = None
 
     def summary(self) -> str:
         if not self.is_schedule:
@@ -73,32 +63,33 @@ class ImageResult:
 async def process_image(db: Database, streamer: Streamer, images: list[tuple[bytes, str]], read: ReadFn,
                         ocr: Optional[OcrFn], first_model: str, second_model: str, post_date: datetime, now: datetime,
                         post_text: str = "", post_id: Optional[str] = None,
-                        image_path: Optional[str] = None, schedule_id: Optional[int] = None) -> ImageResult:
+                        image_path: Optional[str] = None, schedule_id: Optional[int] = None,
+                        review_tz: str = "UTC") -> ImageResult:
     """One schedule, possibly split across several images (e.g. a post with two halves).
 
-    image_path is the saved (stitched) schedule image that cards show."""
+    image_path is the saved (stitched) schedule image that cards show. review_tz (the owner's timezone) only
+    places streams whose image printed no timezone, provisionally, on their review card."""
     result = ImageResult()
-    is_schedule, entries = await read(first_model, images, streamer.name, streamer.home_tz, post_date, post_text)
+    is_schedule, entries = await read(first_model, images, streamer.name, post_date, post_text)
     if not is_schedule or not entries:
         result.is_schedule = is_schedule and bool(entries)
         return result
 
     # OCR cross-check is optional: with a strong reader it flagged correct stylised text more than real mistakes.
     ocr_text = "\n".join([await ocr(data) for data, _ in images]) if ocr else None
-    checked = [cross_check(e, ocr_text, streamer.home_tz) for e in entries]
+    checked = [cross_check(e, ocr_text) for e in entries]
     if any(not c.ok for c in checked):
         # X-3: disagreement → second opinion from the stronger model; keep whichever reading OCR agrees with more.
         result.used_second_opinion = True
         try:
-            _, second = await read(second_model, images, streamer.name, streamer.home_tz, post_date, post_text)
-            checked_b = [cross_check(e, ocr_text, streamer.home_tz) for e in second]
+            _, second = await read(second_model, images, streamer.name, post_date, post_text)
+            checked_b = [cross_check(e, ocr_text) for e in second]
             checked = _merge_readings(checked, checked_b)
         except Exception as e:  # a failed second opinion just means the first reading goes to review
             log.warning("Second opinion failed: %s", e)
 
     for c in checked:
-        await _place(db, streamer, c, now, post_id, image_path, schedule_id, result)
-    result.suggestion = _timezone_suggestion(db, streamer, checked)
+        await _place(db, streamer, c, now, post_id, image_path, schedule_id, review_tz, result)
     return result
 
 
@@ -119,13 +110,15 @@ def _merge_readings(first: list[CheckedEntry], second: list[CheckedEntry]) -> li
 
 
 async def _place(db: Database, streamer: Streamer, c: CheckedEntry, now: datetime, post_id: Optional[str],
-                 image_path: Optional[str], schedule_id: Optional[int], result: ImageResult) -> None:
+                 image_path: Optional[str], schedule_id: Optional[int], review_tz: str,
+                 result: ImageResult) -> None:
     issues = list(c.issues)
     start, tz_label = c.start_utc, c.tz_name
     if start is None:
-        # Unknown timezone or unreadable time: make a provisional time in the home timezone for the review card.
-        start, _, more = to_utc(ReadEntry(c.read.date, c.read.start_time, None, c.read.title), streamer.home_tz)
-        tz_label = streamer.home_tz
+        # No/unknown timezone or unreadable time: place it provisionally in the owner's timezone for the review
+        # card, where Edit's timezone dropdown fixes it.
+        start, _, more = to_utc(ReadEntry(c.read.date, c.read.start_time, review_tz, c.read.title))
+        tz_label = None
         if start is None:
             log.info("Dropped unreadable entry %s", c.read)
             return
@@ -160,28 +153,3 @@ async def _place(db: Database, streamer: Streamer, c: CheckedEntry, now: datetim
                             confidence=c.read.confidence, post_id=post_id, image_path=image_path,
                             schedule_id=schedule_id, subtitle=c.read.subtitle)
     result.events.append(NewImageEntry(entry) if not issues else NeedsReview(entry, issues))
-
-
-def _timezone_suggestion(db: Database, streamer: Streamer, checked: list[CheckedEntry]) -> Optional[TimezoneSuggestion]:
-    """Offer once per (streamer, timezone) to switch home_tz to the timezone the images actually use."""
-    # Schedules that print JST are read in JST by the owner's choice, so their timezones say nothing reliable
-    # about where the streamer lives (and those images never need home_tz anyway): don't suggest anything.
-    labels = [(c.read.timezone_as_written or "").strip() for c in checked]
-    if any(label.upper() == "JST" for label in labels):
-        return None
-    written = Counter(label for label in labels if label)
-    if not written:
-        return None
-    label = written.most_common(1)[0][0]
-    iana = TZ_ABBREVIATIONS.get(label.upper().replace(".", ""), label)
-    tz, _, problem = resolve_timezone(iana, streamer.home_tz)
-    if problem or "/" not in iana or iana.startswith("Etc/") or iana == streamer.home_tz:
-        return None
-    now = datetime.now(timezone.utc)
-    if now.astimezone(tz).utcoffset() == now.astimezone(resolve_timezone(streamer.home_tz, "UTC")[0]).utcoffset():
-        return None  # same clock time anyway
-    key = f"tz_suggested:{streamer.id}:{iana}"
-    if db.get_setting(key):
-        return None
-    db.set_setting(key, "1")
-    return TimezoneSuggestion(streamer, label, iana)

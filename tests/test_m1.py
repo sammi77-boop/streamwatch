@@ -6,7 +6,7 @@ import unittest
 from datetime import datetime, timedelta, timezone
 
 from streamwatch.db import PAUSED_FOREVER, Database
-from streamwatch.parsing import parse_channel_url, parse_duration, suggest_timezones, valid_timezone
+from streamwatch.parsing import parse_channel_url, parse_duration
 
 
 class ParseChannelUrlTest(unittest.TestCase):
@@ -43,24 +43,6 @@ class ParseDurationTest(unittest.TestCase):
     def test_invalid(self):
         for text in ("", "3", "d", "3x", "abc", "3d junk", "0h", "-1d"):
             self.assertIsNone(parse_duration(text), text)
-
-
-class TimezoneTest(unittest.TestCase):
-    def test_timezones(self):
-        self.assertTrue(valid_timezone("America/New_York"))
-        self.assertTrue(valid_timezone("Asia/Taipei"))
-        for bad in ("Mars/Olympus", "", "America", "../etc/passwd"):
-            self.assertFalse(valid_timezone(bad), bad)
-
-
-    def test_suggestions(self):
-        self.assertEqual(suggest_timezones("")[0], "America/Los_Angeles")
-        self.assertEqual(suggest_timezones("tok")[0], "Asia/Tokyo")
-        self.assertEqual(suggest_timezones("vla")[0], "Asia/Vladivostok")
-        self.assertIn("America/New_York", suggest_timezones("new york"))
-        self.assertTrue(all(valid_timezone(tz) for tz in suggest_timezones("a")))
-        self.assertLessEqual(len(suggest_timezones("a")), 25)
-        self.assertEqual(suggest_timezones("zzzz"), [])
 
 
 class DatabaseTest(unittest.TestCase):
@@ -109,11 +91,6 @@ class DatabaseTest(unittest.TestCase):
         self.assertEqual(self.db.get_streamer(s.id).reading_notes, "A | B is start and end")
         self.db.set_reading_notes(s.id, "")
         self.assertIsNone(self.db.get_streamer(s.id).reading_notes)
-
-    def test_set_home_tz(self):
-        s, _ = self.db.add_streamer("UC9", "@claudeclawmark", "Claude Clawmark", "America/Los_Angeles")
-        self.db.set_home_tz(s.id, "Asia/Tokyo")
-        self.assertEqual(self.db.find_active_streamer("@claudeclawmark").home_tz, "Asia/Tokyo")
 
     def test_pause_forever_and_resume(self):
         self.assertFalse(self.db.is_paused())

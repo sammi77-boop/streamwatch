@@ -28,17 +28,17 @@ def entry(day, time, title, tz="PT", conf=0.95, collab=False):
 
 class TimezoneTest(unittest.TestCase):
     def test_abbreviations_offsets_and_names(self):
-        self.assertEqual(resolve_timezone("PT", "Asia/Tokyo")[1], "PT")
-        self.assertEqual(str(resolve_timezone("JST", "UTC")[0]), "Asia/Tokyo")
-        self.assertEqual(resolve_timezone("GMT+9", "UTC")[0].utcoffset(None), timedelta(hours=9))
-        self.assertEqual(resolve_timezone("UTC-07:00", "UTC")[0].utcoffset(None), timedelta(hours=-7))
-        self.assertEqual(str(resolve_timezone(None, "Asia/Tokyo")[0]), "Asia/Tokyo")  # X-4 fallback
-        self.assertIsNotNone(resolve_timezone("Mars Time", "UTC")[2])
+        self.assertEqual(resolve_timezone("PT")[1], "PT")
+        self.assertEqual(str(resolve_timezone("JST")[0]), "Asia/Tokyo")
+        self.assertEqual(resolve_timezone("GMT+9")[0].utcoffset(None), timedelta(hours=9))
+        self.assertEqual(resolve_timezone("UTC-07:00")[0].utcoffset(None), timedelta(hours=-7))
+        self.assertEqual(resolve_timezone(None)[2], "no timezone printed on the image")  # no guessing
+        self.assertIsNotNone(resolve_timezone("Mars Time")[2])
 
     def test_to_utc_handles_daylight_saving(self):
-        start, label, issues = to_utc(entry("2026-10-13", "19:00", "x"), "UTC")
+        start, label, issues = to_utc(entry("2026-10-13", "19:00", "x"))
         self.assertEqual(start, datetime(2026, 10, 14, 2, 0, tzinfo=timezone.utc))  # PDT = UTC-7
-        start, _, _ = to_utc(entry("2026-12-01", "19:00", "x"), "UTC")
+        start, _, _ = to_utc(entry("2026-12-01", "19:00", "x"))
         self.assertEqual(start, datetime(2026, 12, 2, 3, 0, tzinfo=timezone.utc))  # PST = UTC-8
 
 
@@ -57,10 +57,10 @@ class CrossCheckTest(unittest.TestCase):
         self.assertFalse(date_in_text(date(2026, 10, 15), "MON 12 TUE 13"))
 
     def test_agreement_and_disagreement(self):
-        self.assertTrue(cross_check(entry("2026-10-15", "17:30", "Karaoke"), OCR, "UTC").ok)
-        bad = cross_check(entry("2026-10-15", "18:30", "Karaoke"), OCR, "UTC")
+        self.assertTrue(cross_check(entry("2026-10-15", "17:30", "Karaoke"), OCR).ok)
+        bad = cross_check(entry("2026-10-15", "18:30", "Karaoke"), OCR)
         self.assertIn("time 18:30 not found by OCR", bad.issues)
-        low = cross_check(entry("2026-10-15", "17:30", "Karaoke", conf=0.5), OCR, "UTC")
+        low = cross_check(entry("2026-10-15", "17:30", "Karaoke", conf=0.5), OCR)
         self.assertIn("low confidence (50%)", low.issues)
 
 
@@ -70,21 +70,21 @@ class SlotDateTest(unittest.TestCase):
 
     def test_correct_reading_passes(self):
         good = ReadEntry("2026-10-15", "18:00", "EDT", "FIRST STAGE FABLES | DAY 6", slot_date="2026-10-15")
-        checked = cross_check(good, self.OCR, "America/Los_Angeles")
+        checked = cross_check(good, self.OCR)
         self.assertTrue(checked.ok, checked.issues)
         self.assertEqual(checked.start_utc, datetime(2026, 10, 15, 22, 0, tzinfo=timezone.utc))  # Thu 3 PM PDT
 
     def test_mixed_timezone_rows_go_to_review(self):
         # The bug: JST's time with the column's date → one day early
         bad = ReadEntry("2026-10-15", "07:00", "JST", "FIRST STAGE FABLES | DAY 6", slot_date="2026-10-15")
-        self.assertTrue(cross_check(bad, self.OCR, "America/Los_Angeles").ok)  # OCR alone can't catch it...
+        self.assertTrue(cross_check(bad, self.OCR).ok)  # OCR alone can't catch it...
         bad.other_times = [("2026-10-15", "15:00", "PDT"), ("2026-10-15", "18:00", "EDT")]
-        self.assertIn("timezones disagree", " ".join(cross_check(bad, self.OCR, "America/Los_Angeles").issues))
+        self.assertIn("timezones disagree", " ".join(cross_check(bad, self.OCR).issues))
         good = ReadEntry("2026-10-15", "18:00", "EDT", "DAY 6", slot_date="2026-10-15",
                          other_times=[("2026-10-16", "07:00", "JST"), ("2026-10-15", "15:00", "PDT")])
-        self.assertTrue(cross_check(good, self.OCR, "America/Los_Angeles").ok)  # all three rows are one moment
+        self.assertTrue(cross_check(good, self.OCR).ok)  # all three rows are one moment
         shifted = ReadEntry("2026-10-16", "07:00", "JST", "FIRST STAGE FABLES | DAY 6", slot_date="2026-10-15")
-        issues = cross_check(shifted, self.OCR, "America/Los_Angeles").issues
+        issues = cross_check(shifted, self.OCR).issues
         self.assertIn("differs from the day it's listed under", " ".join(issues))  # ...but the slot check does
 
 
@@ -94,20 +94,19 @@ class RealRoscoReadingTest(unittest.TestCase):
     def test_one_misread_row_does_not_flag_a_correct_stream(self):
         day5 = ReadEntry("2026-10-14", "18:00", "EDT", "LOVEBYTE.EXE #FSFABLES | DAY 5", slot_date="2026-10-14",
                          other_times=[("2026-10-14", "07:00", "JST"), ("2026-10-14", "15:00", "PDT")])
-        self.assertTrue(cross_check(day5, "14TH OF OCTOBER, WED JST 07:00 | 14:00 EDT 6 PM | 1 AM PDT 3 PM | 10 PM",
-                                    "America/New_York").ok)
+        self.assertTrue(cross_check(day5, "14TH OF OCTOBER, WED JST 07:00 | 14:00 EDT 6 PM | 1 AM PDT 3 PM | 10 PM").ok)
 
     def test_tilted_box_passes_if_any_agreeing_row_is_found(self):
         d9 = ReadEntry("2026-10-18", "20:00", "EDT", "FIRST STAGE FABLES | D9", slot_date="2026-10-18",
                        other_times=[("2026-10-19", "09:00", "JST"), ("2026-10-18", "17:00", "PDT")])
         ocr = "18TH OF OCTOBER, SUN FIRST STAGE FABLES D9 JST 09:00 (M) PDT 5:00 PM EDT 8:0O PN"  # 8 PM garbled
-        self.assertTrue(cross_check(d9, ocr, "America/New_York").ok)
+        self.assertTrue(cross_check(d9, ocr).ok)
 
     def test_main_time_against_all_other_rows_is_still_caught(self):
         bug = ReadEntry("2026-10-15", "07:00", "JST", "DAY 6", slot_date="2026-10-15",
                         other_times=[("2026-10-15", "18:00", "EDT"), ("2026-10-15", "15:00", "PDT")])
         self.assertIn("timezones disagree",
-                      " ".join(cross_check(bug, "THU 15 JST 07:00 (FRI) EDT 6:00 PM PDT 3:00 PM", "UTC").issues))
+                      " ".join(cross_check(bug, "THU 15 JST 07:00 (FRI) EDT 6:00 PM PDT 3:00 PM").issues))
 
 
 class JstFirstTest(unittest.TestCase):
@@ -117,25 +116,24 @@ class JstFirstTest(unittest.TestCase):
     def test_jst_next_day_confirmed_by_check_row(self):
         day6 = ReadEntry("2026-10-16", "07:00", "JST", "DAY 6", slot_date="2026-10-15",
                          other_times=[("2026-10-15", "18:00", "EDT")])
-        checked = cross_check(day6, self.OCR, "America/New_York")
+        checked = cross_check(day6, self.OCR)
         self.assertTrue(checked.ok, checked.issues)
         self.assertEqual(checked.start_utc, datetime(2026, 10, 15, 22, 0, tzinfo=timezone.utc))  # Thu 3 PM PT
 
     def test_jst_paired_with_column_date_is_caught(self):
         wrong = ReadEntry("2026-10-15", "07:00", "JST", "DAY 6", slot_date="2026-10-15",
                           other_times=[("2026-10-15", "18:00", "EDT")])
-        self.assertIn("timezones disagree", " ".join(cross_check(wrong, self.OCR, "America/New_York").issues))
+        self.assertIn("timezones disagree", " ".join(cross_check(wrong, self.OCR).issues))
 
     def test_unmarked_jst_row_a_day_early_is_caught(self):
         # Rosco's Day 5: "JST 07:00 | 14:00" under WED 14 with no (THU) marker; it's really Thu 15 in Japan
         early = ReadEntry("2026-10-14", "07:00", "JST", "LOVEBYTE.EXE", slot_date="2026-10-14",
                           other_times=[("2026-10-14", "18:00", "EDT")])
-        self.assertIn("timezones disagree", " ".join(cross_check(early, "WED 14 JST 07:00 | 14:00 EDT 6 PM",
-                                                                 "America/New_York").issues))
+        self.assertIn("timezones disagree", " ".join(cross_check(early, "WED 14 JST 07:00 | 14:00 EDT 6 PM").issues))
 
     def test_jst_without_check_row_off_its_column_goes_to_review(self):
         alone = ReadEntry("2026-10-16", "07:00", "JST", "DAY 6", slot_date="2026-10-15")
-        self.assertIn("differs from the day", " ".join(cross_check(alone, self.OCR, "UTC").issues))
+        self.assertIn("differs from the day", " ".join(cross_check(alone, self.OCR).issues))
 
 
 class MatchingTest(unittest.TestCase):
@@ -172,7 +170,7 @@ class PipelineTest(unittest.IsolatedAsyncioTestCase):
         os.remove(self.path)
 
     def reader(self, first, second=None):
-        async def read(model, images, name, tz, post_date, post_text):
+        async def read(model, images, name, post_date, post_text):
             self.images_seen = images
             self.calls.append(model)
             return True, (first if model == "A" or second is None else second)
@@ -275,15 +273,30 @@ class PipelineTest(unittest.IsolatedAsyncioTestCase):
                          datetime(2026, 10, 15, 6, 0, tzinfo=timezone.utc), False)
         self.assertIsInstance(apply_update(self.db, self.streamer, "v4", live, NOW)[0], SurpriseLive)
 
-    async def test_timezone_suggestion_once(self):
-        self.streamer = self.db.get_streamer(self.db.add_streamer("UC2", "@claude", "Claude", "America/Los_Angeles")[0].id)
-        kst = [ReadEntry("2026-10-16", "21:00", "KST", "Minecraft", False, [], 0.95)]
-        result = await process_image(self.db, self.streamer, [(b"i", "image/png")], self.reader(kst), None,
+    async def test_image_without_a_timezone_goes_to_review_in_owners_time(self):
+        no_tz = [ReadEntry("2026-10-16", "21:00", None, "Minecraft", False, [], 0.95)]
+        result = await process_image(self.db, self.streamer, [(b"i", "image/png")], self.reader(no_tz, no_tz), None,
+                                     "A", "B", NOW, NOW, review_tz="America/Los_Angeles")
+        self.assertIsInstance(result.events[0], NeedsReview)
+        self.assertIn("no timezone printed on the image", result.events[0].issues)
+        # placed provisionally at 9 PM in the owner's timezone until it's fixed in review
+        self.assertEqual(result.events[0].entry.start_utc, datetime(2026, 10, 17, 4, 0, tzinfo=timezone.utc))
+
+    async def test_without_ocr_correct_readings_go_straight_to_the_table(self):
+        # Lucien's R.E.P.O.: small stylised text the OCR couldn't read, but Gemini's two rows agree
+        repo = ReadEntry("2026-10-17", "11:00", "JST", "R.E.P.O.", False, [], 0.95, "2026-10-17",
+                         [("2026-10-16", "22:00", "EDT")])  # same layout as Lucien's, moved after the test's "now"
+        result = await process_image(self.db, self.streamer, [(b"i", "image/png")], self.reader([repo]), None,
                                      "A", "B", NOW, NOW)
-        self.assertEqual((result.suggestion.written, result.suggestion.iana), ("KST", "Asia/Seoul"))
-        again = await process_image(self.db, self.streamer, [(b"i", "image/png")], self.reader(kst), None,
-                                    "A", "B", NOW, NOW)
-        self.assertIsNone(again.suggestion)
+        self.assertEqual([type(e) for e in result.events], [NewImageEntry])
+        self.assertEqual(self.calls, ["A"])  # no second read needed
+
+    async def test_without_ocr_a_day_off_is_still_caught(self):
+        wrong = ReadEntry("2026-10-15", "07:00", "JST", "DAY 6", False, [], 0.95, "2026-10-15",
+                          [("2026-10-15", "18:00", "EDT")])
+        result = await process_image(self.db, self.streamer, [(b"i", "image/png")],
+                                     self.reader([wrong], [wrong]), None, "A", "B", NOW, NOW)
+        self.assertIsInstance(result.events[0], NeedsReview)
 
     async def test_schedule_split_across_two_images_is_read_together(self):
         ocr_calls = []
@@ -307,32 +320,6 @@ class PipelineTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([type(e) for e in result.events], [NewImageEntry, NewImageEntry])
         self.assertEqual([e.entry.start_utc.hour for e in result.events], [0, 4])
 
-    async def test_no_timezone_suggestion_for_jst_schedules(self):
-        jst = [ReadEntry("2026-10-16", "07:00", "JST", "DAY 6", False, [], 0.95, "2026-10-15",
-                         [("2026-10-15", "18:00", "EDT")])]
-        self.streamer = self.db.get_streamer(self.db.add_streamer("UC3", "@r", "Rosco", "America/Los_Angeles")[0].id)
-        result = await process_image(self.db, self.streamer, [(b"i", "image/png")], self.reader(jst), None,
-                                     "A", "B", NOW, NOW)
-        self.assertIsInstance(result.events[0], NewImageEntry)
-        self.assertEqual(result.events[0].entry.orig_tz, "JST")
-        self.assertIsNone(result.suggestion)
-
-    async def test_without_ocr_correct_readings_go_straight_to_the_table(self):
-        # Lucien's R.E.P.O.: small stylised text the OCR couldn't read, but Gemini's two rows agree
-        repo = ReadEntry("2026-10-17", "11:00", "JST", "R.E.P.O.", False, [], 0.95, "2026-10-17",
-                         [("2026-10-16", "22:00", "EDT")])  # same layout as Lucien's, moved after the test's "now"
-        result = await process_image(self.db, self.streamer, [(b"i", "image/png")], self.reader([repo]), None,
-                                     "A", "B", NOW, NOW)
-        self.assertEqual([type(e) for e in result.events], [NewImageEntry])
-        self.assertEqual(self.calls, ["A"])  # no second read needed
-
-    async def test_without_ocr_a_day_off_is_still_caught(self):
-        wrong = ReadEntry("2026-10-15", "07:00", "JST", "DAY 6", False, [], 0.95, "2026-10-15",
-                          [("2026-10-15", "18:00", "EDT")])
-        result = await process_image(self.db, self.streamer, [(b"i", "image/png")],
-                                     self.reader([wrong], [wrong]), None, "A", "B", NOW, NOW)
-        self.assertIsInstance(result.events[0], NeedsReview)
-
     async def test_not_a_schedule(self):
         async def read(*args):
             return False, []
@@ -353,7 +340,7 @@ class ScheduleImageTest(unittest.IsolatedAsyncioTestCase):
         db = Database(path)
         streamer, _ = db.add_streamer("UC1", "@vanta", "Vantacrow", "America/Los_Angeles")
 
-        async def read(model, images, name, tz, post_date, post_text):
+        async def read(model, images, name, post_date, post_text):
             return True, [entry("2026-10-16", "21:00", "Minecraft hardcore")]
 
         async def ocr(image):
@@ -400,7 +387,7 @@ class GeminiParseTest(unittest.TestCase):
                          ("2026-10-16", "07:00", "JST", "FIRST STAGE FABLES | DAY 6", "READY TO ROCK AND ROLLO!",
                           "2026-10-15"))
         self.assertEqual(e.other_times, [("2026-10-15", "18:00", "EDT")])
-        self.assertTrue(cross_check(e, "THU 15 JST 07:00 (FRI) EDT 6:00 PM", "America/New_York").ok)
+        self.assertTrue(cross_check(e, "THU 15 JST 07:00 (FRI) EDT 6:00 PM").ok)
         with self.assertRaises(GeminiError):
             parse_response({"candidates": [], "promptFeedback": {"blockReason": "SAFETY"}})
         with self.assertRaises(GeminiError):

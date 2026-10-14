@@ -26,7 +26,6 @@ class Config:
     guild_id: int
     owner_id: int
     youtube_api_key: str
-    default_tz: str
     db_path: str
     google_key_path: Path
     google_calendar_id: Optional[str]
@@ -49,7 +48,6 @@ def load_config() -> Config:
         guild_id=int(os.environ["GUILD_ID"]),
         owner_id=int(os.environ["OWNER_ID"]),
         youtube_api_key=os.environ["YOUTUBE_API_KEY"],
-        default_tz=os.environ.get("DEFAULT_STREAMER_TZ", "America/Los_Angeles"),
         db_path=os.environ.get("DB_PATH", str(ROOT / "streamwatch.db")),
         # Service account key; the bot's robot account (decision 10).
         google_key_path=Path(os.environ.get("GOOGLE_KEY_PATH", str(ROOT / "google_service_account.json"))),

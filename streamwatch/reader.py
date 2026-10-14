@@ -58,7 +58,7 @@ class RefusedError(Exception):
 
 
 async def read_schedule(client: anthropic.AsyncAnthropic, model: str, images: list[tuple[bytes, str]],
-                        streamer: str, home_tz: str, post_date: datetime, post_text: str = "",
+                        streamer: str, post_date: datetime, post_text: str = "",
                         notes: Optional[str] = None) -> tuple[bool, list[ReadEntry]]:
     """Read one schedule that may be split over several images [(bytes, media_type)]. Returns (is_schedule, entries)."""
     image_blocks = [{"type": "image", "source": {"type": "base64", "media_type": media_type,
@@ -70,7 +70,7 @@ async def read_schedule(client: anthropic.AsyncAnthropic, model: str, images: li
         system=SYSTEM,
         messages=[{"role": "user", "content": [
             *image_blocks,
-            {"type": "text", "text": _prompt(streamer, home_tz, post_date, post_text, len(images), notes)},
+            {"type": "text", "text": _prompt(streamer, post_date, post_text, len(images), notes)},
         ]}],
         output_format=_Reading,
         output_config={"effort": "high" if model == SECOND_OPINION else "medium"},

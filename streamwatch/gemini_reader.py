@@ -61,12 +61,11 @@ class GeminiReader:
         self.auth = ServiceAccountToken(key_path, SCOPE)
         self.project = self.auth.info()["project_id"]
 
-    async def read_schedule(self, model: str, images: list[tuple[bytes, str]], streamer: str, home_tz: str,
-                            post_date: datetime, post_text: str = "", notes: Optional[str] = None
+    async def read_schedule(self, model: str, images: list[tuple[bytes, str]], streamer: str, post_date: datetime, post_text: str = "", notes: Optional[str] = None
                             ) -> tuple[bool, list[ReadEntry]]:
         parts = [{"inlineData": {"mimeType": media_type, "data": base64.standard_b64encode(data).decode()}}
                  for data, media_type in images]
-        parts.append({"text": _prompt(streamer, home_tz, post_date, post_text, len(images), notes)})
+        parts.append({"text": _prompt(streamer, post_date, post_text, len(images), notes)})
         body = {"systemInstruction": {"parts": [{"text": SYSTEM}]},
                 "contents": [{"role": "user", "parts": parts}],
                 "generationConfig": {"responseMimeType": "application/json", "responseSchema": RESPONSE_SCHEMA}}

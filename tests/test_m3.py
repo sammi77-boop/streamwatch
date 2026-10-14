@@ -43,7 +43,7 @@ class CalendarFlowTest(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         fd, self.path = tempfile.mkstemp(suffix=".db")
         os.close(fd)
-        config = Config("x", 1, 42, "k", "America/Los_Angeles", self.path, Path("/nonexistent"),
+        config = Config("x", 1, 42, "k", self.path, Path("/nonexistent"),
                         "streams@group.calendar.google.com")
         self.bot = StreamWatch(config)
         self.bot.calendar = FakeCalendar()
@@ -172,7 +172,7 @@ class ScheduleTableTest(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         fd, self.path = tempfile.mkstemp(suffix=".db")
         os.close(fd)
-        config = Config("x", 1, 42, "k", "America/Los_Angeles", self.path, Path("/nonexistent"), "cal@group")
+        config = Config("x", 1, 42, "k", self.path, Path("/nonexistent"), "cal@group")
         self.bot = StreamWatch(config)
         self.bot.calendar = FakeCalendar()
 

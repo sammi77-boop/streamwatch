@@ -5,7 +5,6 @@ from __future__ import annotations
 import re
 from datetime import timedelta
 from typing import Optional
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 CHANNEL_URL_EXAMPLE = "https://www.youtube.com/@handle  or  https://www.youtube.com/channel/UC…"
 
@@ -38,32 +37,3 @@ def parse_duration(text: str) -> Optional[timedelta]:
     for number, unit in parts:
         delta += timedelta(**{units[unit]: int(number)})
     return delta if delta > timedelta(0) else None
-
-
-COMMON_TIMEZONES = [
-    "America/Los_Angeles", "America/Denver", "America/Chicago", "America/New_York", "America/Toronto",
-    "America/Sao_Paulo", "Europe/London", "Europe/Berlin", "Europe/Paris", "Asia/Tokyo", "Asia/Seoul",
-    "Asia/Taipei", "Asia/Shanghai", "Asia/Singapore", "Asia/Manila", "Australia/Sydney", "Pacific/Auckland",
-]
-
-
-def suggest_timezones(text: str, limit: int = 25) -> list[str]:
-    """Autocomplete for timezone options: common zones first, then any IANA zone containing the text."""
-    from zoneinfo import available_timezones
-
-    query = text.strip().lower().replace(" ", "_")
-    if not query:
-        return COMMON_TIMEZONES[:limit]
-    common = [tz for tz in COMMON_TIMEZONES if query in tz.lower()]
-    rest = sorted((tz for tz in available_timezones()
-                   if "/" in tz and query in tz.lower() and tz not in common and not tz.startswith("Etc/")),
-                  key=lambda tz: (not tz.lower().rsplit("/", 1)[-1].startswith(query), tz))
-    return (common + rest)[:limit]
-
-
-def valid_timezone(name: str) -> bool:
-    try:
-        ZoneInfo(name)
-        return True
-    except (ZoneInfoNotFoundError, ValueError, OSError):
-        return False

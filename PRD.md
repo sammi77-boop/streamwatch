@@ -52,8 +52,8 @@ A single-user agent that **finds schedules automatically, sends the weekly sched
 ### 5.1 Streamer management (Discord slash commands)
 | ID | Requirement |
 |---|---|
-| F-1 | `/follow <channel URL> [home_tz]` accepts `youtube.com/@handle` and `youtube.com/channel/UC…` links. It resolves the channel ID with `channels.list` (1 quota unit) and stores it with the streamer's home timezone, which is used when an image shows no timezone. Anything that isn't a valid channel URL is rejected with an example of the right format. |
-| F-2 | `/unfollow <name>`, `/list`, `/digest` (send the digest now), `/timezone <IANA tz>` (manual override), `/pause [duration]` and `/resume`. While paused, the agent stops all scraping, polling, digests and alerts. Existing calendar events stay as they are. The bot keeps running so it can receive `/resume`, and `/pause 3d` resumes automatically. |
+| F-1 | `/follow <channel URL>` accepts `youtube.com/@handle` and `youtube.com/channel/UC…` links and resolves the channel with `channels.list` (1 quota unit). No streamer timezone is stored (removed 2026-10-14): times come from waiting rooms or the timezone printed on schedule images. |
+| F-2 | `/unfollow <name>`, `/list`, `/digest` (send the digest now), `/reading_note`, `/pause [duration]` and `/resume`. While paused, the agent stops all scraping, polling, digests and alerts. Existing calendar events stay as they are. The bot keeps running so it can receive `/resume`, and `/pause 3d` resumes automatically. |
 | F-3 | `/drop <image>` or posting an image in `#schedule-drop` runs it through the extraction pipeline. This is the manual fallback when scraping fails, and also the way to add X schedules by hand. |
 
 ### 5.2 Schedule ingestion
@@ -72,7 +72,7 @@ A single-user agent that **finds schedules automatically, sends the weekly sched
 | X-1 | **Reader A (vision LLM):** A Claude vision model returns structured JSON: `[{date, start_time, timezone_as_written, title_as_written, is_collab, collab_partners[], confidence}]`. It gets the post text and post date as context, so it can work out "Mon/Tue" to real dates. |
 | X-2 | ~~**Reader B (free OCR):**~~ *Removed 2026-10-14: with Gemini 3.8 Flash, OCR mostly flagged correct stylised text.*  Tesseract OCR reads the same image (upscaled and contrast-normalized first) into raw text. |
 | X-3 | **Cross-check:** the main time row (JST when printed) must agree with one other printed row (same moment), and the date must match its column unless that row confirms it. If they disagree, the reader reports low confidence, or the timezone is unknown, the entry goes to **`#needs-review`**. That card shows the image plus the parsed fields, with **Confirm / Edit / Discard** buttons. |
-| X-4 | Timezone resolution order: timezone written in the image, then the streamer's `home_tz`, then ask in review. All times are stored in UTC. |
+| X-4 | Timezone: only what's **printed on the image** (JST row first when there is one), converted to my timezone. No guessing where a streamer lives: if an image prints no timezone, the stream goes to review, where Edit's timezone dropdown sets it. All times are stored in UTC. |
 | X-5 | Collab detection uses keywords (collab, ft., w/, x, @mentions) plus the LLM flag. Partners come from @mentions and names in the post text or image. |
 
 ### 5.4 Discord delivery
@@ -141,7 +141,7 @@ Private server, single member (me). Channels:
 - **Secrets:** Discord bot token, YouTube API key, Anthropic API key, and Google OAuth refresh token, kept in environment variables on the VM.
 
 ### Data model (sketch)
-- `streamers(id, channel_id, handle, name, home_tz, active)`
+- `streamers(id, channel_id, handle, name, active, reading_notes)`
 - `posts(post_id, streamer_id, posted_at, text, image_url, is_schedule, processed_at)`
 - `entries(id, streamer_id, start_utc, title, is_collab, partners_json, source, post_id, video_id, confidence, status[pending_review|confirmed|cancelled])`
 - `picks(entry_id, gcal_event_id, picked_at)`
@@ -154,7 +154,7 @@ Private server, single member (me). Channels:
 | Scraping the YouTube Posts tab breaks or gets blocked (it isn't an official API) | No new schedules from images | Health alert in `#bot-health`, waiting-room fallback, manual `#schedule-drop`. Scraping code kept in one replaceable module. |
 | Stylized schedule graphics fool the OCR | False disagreements | Disagreements go to review instead of being dropped. Tune the image preprocessing. Track the review rate. |
 | Calendar access stops working (service account key deleted, or calendar unshared) | Calendar events stop being added | Alerts still work; the bot posts the problem in `#bot-health` once. (Replaced the OAuth approach, whose tokens expire every 7 days without a published app; see decision 10.) |
-| Streamer posts a schedule with no timezone | Times off by hours | `home_tz` set when the streamer is followed, otherwise review |
+| Streamer posts a schedule with no timezone | Times unknown | Goes to `#needs-review`; I pick the timezone in Edit (no per-streamer guess) |
 | YouTube blocks requests from the cloud VM's IP ("confirm you're not a bot") | Community scraping (and possibly the live-page watch) fails completely | **M0 spike** tests this before any other work. If blocked: run the scraper from a home machine, or use a paid hosted scraping API. See §9, decision 6. |
 | Members-only streams show up in RSS | Noise | Filter where detectable, otherwise ignore (non-goal) |
 | Google Calendar's timezone only changes after I accept its "update time zone?" prompt | Travel goes undetected | `/timezone` manual override (T-3) |
@@ -183,6 +183,8 @@ Private server, single member (me). Channels:
 | 9 | Permanent free-chat waiting rooms | Found during M0 (@kugaleo_Q's room is dated 2028). Ignored by rule I-4a. |
 | 10 | How does the bot get calendar access? | A **service account** (robot Google account) that I share one calendar with. Publishing an OAuth app needs a website and privacy policy on an owned domain, and testing-mode tokens expire every 7 days. (2026-10-14) |
 | 11 | Which model reads schedule images? | **Gemini 3.8 Flash** via Vertex AI (Agent Platform), billed to the Google Cloud trial credit instead of prepaid Anthropic credit. In a side-by-side test on Rosco's real schedule, 3.8 Flash read every stream and subtitle correctly; 3.5 Flash-Lite put LOVEBYTE.EXE a day early (dropped as "over") and mixed up subtitles. (2026-10-14) |
+
+| 12 | Streamer home timezones? | Removed. We don't care where streamers live: waiting rooms give exact times, and schedule images print their timezone (JST first), which the bot converts to mine. Images with no timezone go to review. Removed `/follow`'s home_tz, `/set_home_tz` and timezone suggestions. (2026-10-14) |
 
 ## 10. Notes (parked ideas, not part of the current product)
 

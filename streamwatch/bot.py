@@ -22,14 +22,14 @@ from .config import Config, load_config
 from .db import PAUSED_FOREVER, Database, Entry, Streamer
 from .collab import short_channel_name
 from .gcal import CalendarAuthError, CalendarError, GoogleCalendar, event_description, event_title
-from .parsing import CHANNEL_URL_EXAMPLE, parse_channel_url, parse_duration, suggest_timezones, valid_timezone
-from .pipeline import NeedsReview, NewImageEntry, TimezoneSuggestion, process_image
+from .parsing import CHANNEL_URL_EXAMPLE, parse_channel_url, parse_duration
+from .pipeline import NeedsReview, NewImageEntry, process_image
 from .tracker import Cancelled, Event, NewWaitingRoom, Rescheduled, SurpriseLive, Updated, WentLive, apply_update
 from . import websub
 from .ui import (CHANNELS, SCHEDULE_FILENAME, ScheduleCalendarSelect, ScheduleDeleteSelect, ScheduleEditSelect,
                  card_channel, schedule_embed, schedule_view, ConfirmReviewButton, DeleteCardButton, DiscardReviewButton, EditCardButton,
-                 EditReviewButton, KeepTimezoneButton, PickButton, SetTimezoneButton, UnpickButton, card_embed, card_view, change_notice, live_alert,
-                 review_embed, review_view, timezone_suggestion)
+                 EditReviewButton, PickButton, UnpickButton, card_embed, card_view, change_notice, live_alert,
+                 review_embed, review_view)
 from .youtube import (YouTubeError, fetch_live_video_id, fetch_rss_video_ids, fetch_videos, resolve_channel,
                       resolve_handle_names)
 
@@ -83,7 +83,7 @@ class StreamWatch(discord.Client):
         self.http_session = aiohttp.ClientSession()
         self.calendar = GoogleCalendar(self.http_session, self.config.google_key_path, self.config.google_calendar_id)
         self.add_dynamic_items(PickButton, UnpickButton, ConfirmReviewButton, EditReviewButton, DiscardReviewButton,
-                               SetTimezoneButton, KeepTimezoneButton, EditCardButton, DeleteCardButton,
+                               EditCardButton, DeleteCardButton,
                                ScheduleCalendarSelect, ScheduleEditSelect, ScheduleDeleteSelect)
         self.claude = None
         if self.config.anthropic_api_key:
@@ -301,15 +301,15 @@ class StreamWatch(discord.Client):
         if self.config.image_reader == "claude":
             from . import reader
 
-            async def read(model, imgs, name, tz, pdate, ptext):
-                return await reader.read_schedule(self.claude, model, imgs, name, tz, pdate, ptext,
+            async def read(model, imgs, name, pdate, ptext):
+                return await reader.read_schedule(self.claude, model, imgs, name, pdate, ptext,
                                                   notes=streamer.reading_notes)
         else:
             from . import gemini_reader as reader
             gemini = reader.GeminiReader(self.http_session, self.config.google_key_path)
 
-            async def read(model, imgs, name, tz, pdate, ptext):
-                return await gemini.read_schedule(model, imgs, name, tz, pdate, ptext, notes=streamer.reading_notes)
+            async def read(model, imgs, name, pdate, ptext):
+                return await gemini.read_schedule(model, imgs, name, pdate, ptext, notes=streamer.reading_notes)
 
         # Keep one picture of the whole schedule (parts stitched together) to show on its cards.
         self.config.images_dir.mkdir(parents=True, exist_ok=True)
@@ -320,7 +320,8 @@ class StreamWatch(discord.Client):
         result = await process_image(self.db, streamer, [(data, mtype) for data, mtype, _ in images], read,
                                      None,  # no OCR check (removed 2026-10-14; see PRD X-2)
                                      reader.FIRST_READER, reader.SECOND_OPINION, post_date or now, now,
-                                     post_text, post_id, str(image_path), schedule_id)
+                                     post_text, post_id, str(image_path), schedule_id,
+                                     review_tz=self.config.owner_tz)
         # New streams go into ONE table message; changes to streams listed before update their own tables.
         if self.db.schedule_entries(schedule_id):
             await self.post_schedule(schedule_id)
@@ -329,12 +330,6 @@ class StreamWatch(discord.Client):
         for event in (e for e in result.events if isinstance(e, NeedsReview)):
             log.info("Needs review: %s at %s (%s)", event.entry.title, event.entry.start_utc, "; ".join(event.issues))
             await self.post_review(event.entry, streamer, event.issues, images)
-        if result.suggestion:
-            message = timezone_suggestion(result.suggestion.streamer, result.suggestion.written,
-                                          result.suggestion.iana)
-            embed = discord.Embed(description="From this schedule image:", color=discord.Color.light_grey())
-            embed.set_image(url=f"attachment://{SCHEDULE_FILENAME}")
-            await self.send("bot-health", embed=embed, **message, **self.schedule_file(str(image_path)))
         return result
 
     @staticmethod
@@ -579,22 +574,13 @@ def register_commands(bot: StreamWatch) -> None:
     tree = bot.tree
 
     @tree.command(description="Start tracking a YouTube streamer")
-    @app_commands.describe(
-        url="Channel link, e.g. https://www.youtube.com/@handle",
-        home_tz="Streamer's timezone. Start typing a city, e.g. tokyo or new_york",
-    )
-    async def follow(interaction: discord.Interaction, url: str, home_tz: Optional[str] = None) -> None:
+    @app_commands.describe(url="Channel link, e.g. https://www.youtube.com/@handle")
+    async def follow(interaction: discord.Interaction, url: str) -> None:
         target = parse_channel_url(url)
         if not target:
             await interaction.response.send_message(
                 f"That isn't a YouTube channel link. Use: `{CHANNEL_URL_EXAMPLE}`", ephemeral=True)
             return
-        tz = home_tz or bot.config.default_tz
-        if not valid_timezone(tz):
-            await interaction.response.send_message(
-                f"`{tz}` isn't a timezone I know. Use a name like `America/New_York` or `Asia/Tokyo`.", ephemeral=True)
-            return
-
         await interaction.response.defer(thinking=True)
         try:
             info = await resolve_channel(bot.http_session, bot.config.youtube_api_key, **target)
@@ -606,20 +592,16 @@ def register_commands(bot: StreamWatch) -> None:
             await interaction.followup.send(f"No YouTube channel found for `{url}`.")
             return
 
-        streamer, created = bot.db.add_streamer(info.channel_id, info.handle, info.title, tz)
+        streamer, created = bot.db.add_streamer(info.channel_id, info.handle, info.title)
         if not created:
             await interaction.followup.send(f"Already following **{streamer.name}**.")
             return
         await interaction.followup.send(
-            f"✅ Now following **{streamer.name}** ({streamer.handle or streamer.channel_id}), home timezone `{tz}`. "
+            f"✅ Now following **{streamer.name}** ({streamer.handle or streamer.channel_id}). "
             "Checking their upcoming streams now…")
         if not bot.db.is_paused() and len(bot.channels) == len(CHANNELS):
             asyncio.create_task(bot.run_checks(read_rss=True))
         asyncio.create_task(bot.websub_request(streamer.channel_id))
-
-    @follow.autocomplete("home_tz")
-    async def follow_tz_autocomplete(interaction: discord.Interaction, current: str):
-        return [app_commands.Choice(name=tz, value=tz) for tz in suggest_timezones(current)]
 
     @tree.command(description="Stop tracking a streamer")
     @app_commands.describe(name="Streamer name or @handle")
@@ -635,79 +617,6 @@ def register_commands(bot: StreamWatch) -> None:
 
     @unfollow.autocomplete("name")
     async def unfollow_autocomplete(interaction: discord.Interaction, current: str):
-        current = current.lower()
-        return [app_commands.Choice(name=s.name[:100], value=s.channel_id)
-                for s in bot.db.list_streamers() if current in s.name.lower()][:25]
-
-    @tree.command(description="Change a streamer's home timezone (used when a schedule image shows none)")
-    @app_commands.describe(name="Streamer name or @handle", home_tz="Start typing a city, e.g. tokyo or new_york")
-    async def set_home_tz(interaction: discord.Interaction, name: str, home_tz: str) -> None:
-        streamer = bot.db.find_active_streamer(name)
-        if not streamer:
-            await interaction.response.send_message(f"Not following anyone called `{name}`. Check `/list`.",
-                                                    ephemeral=True)
-            return
-        if not valid_timezone(home_tz):
-            await interaction.response.send_message(
-                f"`{home_tz}` isn't a timezone I know. Use a name like `Asia/Tokyo`.", ephemeral=True)
-            return
-        bot.db.set_home_tz(streamer.id, home_tz)
-        await interaction.response.send_message(
-            f"🕒 **{streamer.name}**'s home timezone is now `{home_tz}` (was `{streamer.home_tz}`).")
-
-    @set_home_tz.autocomplete("name")
-    async def set_home_tz_name_autocomplete(interaction: discord.Interaction, current: str):
-        current = current.lower()
-        return [app_commands.Choice(name=f"{s.name[:80]} ({s.home_tz})", value=s.channel_id)
-                for s in bot.db.list_streamers() if current in s.name.lower()][:25]
-
-    @set_home_tz.autocomplete("home_tz")
-    async def set_home_tz_tz_autocomplete(interaction: discord.Interaction, current: str):
-        return [app_commands.Choice(name=tz, value=tz) for tz in suggest_timezones(current)]
-
-    @tree.command(description="Read a schedule image (screenshot from X, or one the bot missed)")
-    @app_commands.describe(image="The schedule image (or its first part)", streamer="Whose schedule it is",
-                           image2="Optional: second part, if the schedule is split across images",
-                           image3="Optional: third part",
-                           post_text="Optional: text that came with the post, helps with dates")
-    async def drop(interaction: discord.Interaction, image: discord.Attachment, streamer: str,
-                   image2: Optional[discord.Attachment] = None, image3: Optional[discord.Attachment] = None,
-                   post_text: Optional[str] = None) -> None:
-        if bot.config.image_reader == "claude" and bot.claude is None:
-            await interaction.response.send_message(
-                "Image reading isn't turned on yet: add ANTHROPIC_API_KEY to the server's .env.", ephemeral=True)
-            return
-        if bot.config.image_reader != "claude" and not bot.config.google_key_path.exists():
-            await interaction.response.send_message(
-                "Image reading needs the Google service account key on the server.", ephemeral=True)
-            return
-        target = bot.db.find_active_streamer(streamer)
-        if not target:
-            await interaction.response.send_message(f"Not following anyone called `{streamer}`.", ephemeral=True)
-            return
-        attachments = [a for a in (image, image2, image3) if a is not None]
-        for a in attachments:
-            if (a.content_type or "").split(";")[0] not in IMAGE_TYPES:
-                await interaction.response.send_message(f"`{a.filename}` isn't a PNG, JPG, WEBP or GIF image.",
-                                                        ephemeral=True)
-                return
-            if a.size > MAX_IMAGE_BYTES:
-                await interaction.response.send_message(f"`{a.filename}` is over 5 MB; try a smaller screenshot.",
-                                                        ephemeral=True)
-                return
-        await interaction.response.defer(thinking=True)
-        images = [(await a.read(), (a.content_type or "").split(";")[0], a.filename or "schedule.png")
-                  for a in attachments]
-        try:
-            result = await bot.read_image(target, images, post_text or "")
-        except Exception as e:
-            log.exception("Reading image failed")
-            await interaction.followup.send(f"⚠️ Couldn't read that image: {e}")
-            return
-        await interaction.followup.send(f"**{target.name}** · {result.summary()}")
-
-    @drop.autocomplete("streamer")
-    async def drop_streamer_autocomplete(interaction: discord.Interaction, current: str):
         current = current.lower()
         return [app_commands.Choice(name=s.name[:100], value=s.channel_id)
                 for s in bot.db.list_streamers() if current in s.name.lower()][:25]
@@ -738,7 +647,7 @@ def register_commands(bot: StreamWatch) -> None:
                               color=discord.Color.purple())
         if streamers:
             embed.description = "\n".join(
-                f"• **{s.name}** · {s.handle or s.channel_id} · `{s.home_tz}`" + (" · 📝" if s.reading_notes else "")
+                f"• **{s.name}** · {s.handle or s.channel_id}" + (" · 📝" if s.reading_notes else "")
                 for s in streamers)
         else:
             embed.description = "Nobody yet. Add one with `/follow`."

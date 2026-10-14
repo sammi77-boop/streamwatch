@@ -56,10 +56,15 @@ TZ_ABBREVIATIONS = {
 _OFFSET_RE = re.compile(r"^(?:GMT|UTC)\s*([+-])\s*(\d{1,2})(?::?(\d{2}))?$", re.IGNORECASE)
 
 
-def resolve_timezone(written: Optional[str], home_tz: str) -> tuple[Optional[tzinfo], Optional[str], Optional[str]]:
-    """X-4: written timezone → streamer's home timezone. Returns (tz, label, problem)."""
+NO_TIMEZONE = "no timezone printed on the image"
+
+
+def resolve_timezone(written: Optional[str]) -> tuple[Optional[tzinfo], Optional[str], Optional[str]]:
+    """X-4: the timezone written on the image. No guessing: if none is printed, the owner picks it in review.
+
+    Returns (tz, label, problem)."""
     if not written or not written.strip():
-        return ZoneInfo(home_tz), home_tz, None
+        return None, None, NO_TIMEZONE
     text = unicodedata.normalize("NFKC", written).strip().upper().replace(".", "")
     if text in TZ_ABBREVIATIONS:
         return ZoneInfo(TZ_ABBREVIATIONS[text]), written.strip(), None
@@ -74,8 +79,8 @@ def resolve_timezone(written: Optional[str], home_tz: str) -> tuple[Optional[tzi
         return None, None, f"unknown timezone '{written}'"
 
 
-def to_utc(entry: ReadEntry, home_tz: str) -> tuple[Optional[datetime], Optional[str], list[str]]:
-    tz, label, problem = resolve_timezone(entry.timezone_as_written, home_tz)
+def to_utc(entry: ReadEntry) -> tuple[Optional[datetime], Optional[str], list[str]]:
+    tz, label, problem = resolve_timezone(entry.timezone_as_written)
     if problem:
         return None, None, [problem]
     try:
@@ -144,14 +149,14 @@ def _minutes(hhmm: str) -> int:
     return (hour % 24) * 60 + minute
 
 
-def cross_check(entry: ReadEntry, ocr_text: Optional[str], home_tz: str) -> CheckedEntry:
+def cross_check(entry: ReadEntry, ocr_text: Optional[str] = None) -> CheckedEntry:
     """Checks one reading. ocr_text=None skips the OCR checks (the OCR step is off by default since 2026-10-14)."""
-    start_utc, label, issues = to_utc(entry, home_tz)
+    start_utc, label, issues = to_utc(entry)
     if start_utc is not None:
         # Same stream printed in other timezones: they must be the same moment as the main reading.
         agreeing, disagreeing = [], []
         for other_date, other_time, other_tz in entry.other_times:
-            other, _, problems = to_utc(ReadEntry(other_date, other_time, other_tz, entry.title), home_tz)
+            other, _, problems = to_utc(ReadEntry(other_date, other_time, other_tz, entry.title))
             if other is not None:
                 (agreeing if abs(other - start_utc) <= timedelta(minutes=5) else disagreeing).append(
                     (other_date, other_time, other_tz))

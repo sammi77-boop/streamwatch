@@ -35,13 +35,13 @@ Return one entry per scheduled stream. Rules:
 - confidence below 0.8 when text is blurry, stylised, partly hidden, or you had to guess the date or time."""
 
 
-def _prompt(streamer: str, home_tz: str, post_date: datetime, post_text: str, image_count: int,
+def _prompt(streamer: str, post_date: datetime, post_text: str, image_count: int,
             notes: Optional[str] = None) -> str:
     what = ("this schedule image" if image_count == 1 else
             f"these {image_count} images, which are parts of ONE schedule (read them together, in order)")
     owner_notes = (f"\nThe owner's notes on reading this streamer's schedules (these override the general rules):\n"
                    f"{notes.strip()}\n" if notes and notes.strip() else "")
-    return (f"Streamer: {streamer} (usually streams in {home_tz})\n"
+    return (f"Streamer: {streamer}\n"
             f"Posted: {post_date:%A %Y-%m-%d}\n"
             f"Post text: {post_text.strip() or '(none)'}\n{owner_notes}\n"
             f"Read every stream in {what}.")
