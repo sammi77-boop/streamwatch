@@ -164,13 +164,12 @@ async def _place(db: Database, streamer: Streamer, c: CheckedEntry, now: datetim
 
 def _timezone_suggestion(db: Database, streamer: Streamer, checked: list[CheckedEntry]) -> Optional[TimezoneSuggestion]:
     """Offer once per (streamer, timezone) to switch home_tz to the timezone the images actually use."""
-    # JST is read by choice (owner's preference), not because the streamer lives there: suggest from the check row.
-    def home_label(c: CheckedEntry) -> Optional[str]:
-        label = (c.read.timezone_as_written or "").strip()
-        if label.upper() == "JST" and c.read.other_times:
-            return c.read.other_times[0][2]
-        return label or None
-    written = Counter(label for label in map(home_label, checked) if label)
+    # Schedules that print JST are read in JST by the owner's choice, so their timezones say nothing reliable
+    # about where the streamer lives (and those images never need home_tz anyway): don't suggest anything.
+    labels = [(c.read.timezone_as_written or "").strip() for c in checked]
+    if any(label.upper() == "JST" for label in labels):
+        return None
+    written = Counter(label for label in labels if label)
     if not written:
         return None
     label = written.most_common(1)[0][0]

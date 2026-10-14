@@ -277,13 +277,12 @@ class PipelineTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_timezone_suggestion_once(self):
         self.streamer = self.db.get_streamer(self.db.add_streamer("UC2", "@claude", "Claude", "America/Los_Angeles")[0].id)
-        jst = [ReadEntry("2026-10-16", "21:00", "JST", "Minecraft", False, [], 0.95)]
-
-        async def ocr(image):
-            return "FRI 16 21:00 JST Minecraft"
-        result = await process_image(self.db, self.streamer, [(b"i", "image/png")], self.reader(jst), ocr, "A", "B", NOW, NOW)
-        self.assertEqual((result.suggestion.written, result.suggestion.iana), ("JST", "Asia/Tokyo"))
-        again = await process_image(self.db, self.streamer, [(b"i", "image/png")], self.reader(jst), ocr, "A", "B", NOW, NOW)
+        kst = [ReadEntry("2026-10-16", "21:00", "KST", "Minecraft", False, [], 0.95)]
+        result = await process_image(self.db, self.streamer, [(b"i", "image/png")], self.reader(kst), None,
+                                     "A", "B", NOW, NOW)
+        self.assertEqual((result.suggestion.written, result.suggestion.iana), ("KST", "Asia/Seoul"))
+        again = await process_image(self.db, self.streamer, [(b"i", "image/png")], self.reader(kst), None,
+                                    "A", "B", NOW, NOW)
         self.assertIsNone(again.suggestion)
 
     async def test_schedule_split_across_two_images_is_read_together(self):
@@ -308,18 +307,15 @@ class PipelineTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([type(e) for e in result.events], [NewImageEntry, NewImageEntry])
         self.assertEqual([e.entry.start_utc.hour for e in result.events], [0, 4])
 
-    async def test_jst_reading_suggests_the_check_rows_timezone_not_tokyo(self):
+    async def test_no_timezone_suggestion_for_jst_schedules(self):
         jst = [ReadEntry("2026-10-16", "07:00", "JST", "DAY 6", False, [], 0.95, "2026-10-15",
                          [("2026-10-15", "18:00", "EDT")])]
-
-        async def ocr(image):
-            return "THU 15 JST 07:00 (FRI) EDT 6:00 PM"
-        self.streamer = self.db.get_streamer(self.db.add_streamer("UC3", "@r", "Rosco", "Asia/Tokyo")[0].id)
-        result = await process_image(self.db, self.streamer, [(b"i", "image/png")], self.reader(jst), ocr,
+        self.streamer = self.db.get_streamer(self.db.add_streamer("UC3", "@r", "Rosco", "America/Los_Angeles")[0].id)
+        result = await process_image(self.db, self.streamer, [(b"i", "image/png")], self.reader(jst), None,
                                      "A", "B", NOW, NOW)
         self.assertIsInstance(result.events[0], NewImageEntry)
         self.assertEqual(result.events[0].entry.orig_tz, "JST")
-        self.assertEqual(result.suggestion.iana, "America/New_York")
+        self.assertIsNone(result.suggestion)
 
     async def test_without_ocr_correct_readings_go_straight_to_the_table(self):
         # Lucien's R.E.P.O.: small stylised text the OCR couldn't read, but Gemini's two rows agree
