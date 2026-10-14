@@ -225,6 +225,8 @@ class StreamWatch(discord.Client):
     # --- Instant waiting rooms via WebSub push (polling stays on as backup) ---
 
     async def start_websub(self) -> None:
+        if not self.config.websub_enabled:
+            return  # parked (PRD §10): polling every 15 min finds waiting rooms
         token = self.db.get_setting("websub_token")
         secret = self.db.get_setting("websub_secret")
         if not (token and secret):

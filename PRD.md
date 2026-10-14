@@ -62,7 +62,6 @@ A single-user agent that **finds schedules automatically, sends the weekly sched
 | I-1 | **Community tab scrape:** Every 2–3 h, fetch each followed channel's Posts tab, parse new posts (text + images) and dedupe by post ID. |
 | I-2 | **Schedule triage:** A cheap model call classifies each new post as "schedule" or "not schedule". Only schedule posts go on to extraction. |
 | I-3 | **Waiting rooms:** Every 15 min, read each channel's RSS feed (free) to find new video IDs, then call `videos.list` (1 quota unit per 50 videos) for `liveBroadcastContent`, `scheduledStartTime`, title and description. |
-| I-3a | **Instant waiting rooms (WebSub push):** the bot subscribes each followed channel at YouTube's hub; when a streamer creates or updates a video, the hub pushes it to the bot within about a minute and it's looked up right away. Signed with a shared secret; subscriptions renewed every 2 days. RSS polling every 15 min stays as the backup. (Added 2026-10-14.) |
 | I-4 | **Reconciliation:** Match image entries to waiting rooms by date, start time within ±90 min, and title similarity. When a waiting room exists, **its exact start time and title win**. Waiting rooms with no matching image entry are added as entries in their own right. |
 | I-4a | **Ignore free-chat rooms:** skip waiting rooms scheduled more than 30 days ahead, or titled "free chat" / "フリーチャット". Many VTubers keep one permanently, with a fake far-future date, and it must never become an entry or match a picked stream. |
 | I-5 | Scraping failures (layout change, blocked) raise a `#bot-health` alert. The system keeps running on waiting rooms plus manual drops. |
@@ -183,3 +182,21 @@ Private server, single member (me). Channels:
 | 8 | When do streamers post schedules? Do they create waiting rooms? | No fixed pattern for either. Keep the Sunday digest plus midweek updates, and don't assume waiting rooms exist. |
 | 9 | Permanent free-chat waiting rooms | Found during M0 (@kugaleo_Q's room is dated 2028). Ignored by rule I-4a. |
 | 10 | How does the bot get calendar access? | A **service account** (robot Google account) that I share one calendar with. Publishing an OAuth app needs a website and privacy policy on an owned domain, and testing-mode tokens expire every 7 days. (2026-10-14) |
+
+## 10. Notes (parked ideas, not part of the current product)
+
+**Instant waiting-room alerts (WebSub push).** Built, tested and verified on 2026-10-14, then switched off by choice;
+waiting rooms are found by RSS polling every 15 minutes (I-3).
+- How it works: the bot subscribes each followed channel at YouTube's WebSub hub; when a streamer creates or updates
+  a video, the hub pushes it to the bot within about a minute. Pushes are verified with a shared secret;
+  subscriptions renew every 2 days. Free (no quota until a pushed video is looked up).
+- To turn it back on: add `WEBSUB_ENABLED=1` to the server's `.env`, open TCP port 8080 in the Google Cloud
+  firewall (rule `allow-youtube-websub`, ingress, 0.0.0.0/0), and restart the bot.
+
+**Reading schedules from X.** Most streamers post schedules on X. Considered on 2026-10-14 and left out for now:
+the official X API is pay-per-use (about $0.005 per post read since Feb 2026), and FxTwitter can read a single post
+from its link for free. Today, X schedules go through `/drop`.
+
+**Cost decision before 12 Jan 2027.** The Google Cloud free trial ends then; keeping the VM requires upgrading the
+billing account. The e2-micro and 30 GB standard disk are free-tier; the public IPv4 address may cost about
+$3.65/month. Check Billing → Reports before deciding. Anthropic usage is prepaid credit only (keep auto-reload off).
