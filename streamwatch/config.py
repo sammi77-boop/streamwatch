@@ -32,6 +32,7 @@ class Config:
     google_calendar_id: Optional[str]
     anthropic_api_key: Optional[str] = None
     images_dir: Path = ROOT / "schedule_images"
+    image_reader: str = "gemini"  # "gemini" (Vertex AI, on the GCP credit) or "claude" (Anthropic credit)
     owner_tz: str = "America/Los_Angeles"  # for text that can't use Discord's local-time stamps (dropdown labels)
     websub_enabled: bool = False        # parked: see PRD §10 Notes. WEBSUB_ENABLED=1 turns instant alerts on
     websub_port: int = 8080
@@ -58,6 +59,7 @@ def load_config() -> Config:
         anthropic_api_key=os.environ.get("ANTHROPIC_API_KEY") or None,
         websub_enabled=os.environ.get("WEBSUB_ENABLED", "").lower() in ("1", "true", "yes"),
         owner_tz=os.environ.get("OWNER_TZ", "America/Los_Angeles"),
+        image_reader=os.environ.get("IMAGE_READER", "gemini").lower(),
         websub_port=int(os.environ.get("WEBSUB_PORT", "8080")),
         websub_host=os.environ.get("WEBSUB_HOST") or None,
     )

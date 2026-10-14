@@ -137,7 +137,7 @@ Private server, single member (me). Channels:
 
 - **Runtime:** one always-on Python process (discord.py + APScheduler), with SQLite as the only store.
 - **Hosting:** a small always-on VM, either an Oracle Cloud Always-Free VM ($0) or a ~$4/mo VPS. It must stay up for the Discord gateway connection and the 5-min polling.
-- **AI:** a small, cheap Claude model for triage, and a stronger vision model for extraction. About 10 streamers means roughly 10–30 images a week, well under $1/month.
+- **AI:** Gemini 3.8 Flash on Vertex AI reads schedule images, paid from the Google Cloud credit (decision 11). Claude stays available as a fallback (`IMAGE_READER=claude`).
 - **Secrets:** Discord bot token, YouTube API key, Anthropic API key, and Google OAuth refresh token, kept in environment variables on the VM.
 
 ### Data model (sketch)
@@ -182,6 +182,7 @@ Private server, single member (me). Channels:
 | 8 | When do streamers post schedules? Do they create waiting rooms? | No fixed pattern for either. Keep the Sunday digest plus midweek updates, and don't assume waiting rooms exist. |
 | 9 | Permanent free-chat waiting rooms | Found during M0 (@kugaleo_Q's room is dated 2028). Ignored by rule I-4a. |
 | 10 | How does the bot get calendar access? | A **service account** (robot Google account) that I share one calendar with. Publishing an OAuth app needs a website and privacy policy on an owned domain, and testing-mode tokens expire every 7 days. (2026-10-14) |
+| 11 | Which model reads schedule images? | **Gemini 3.8 Flash** via Vertex AI (Agent Platform), billed to the Google Cloud trial credit instead of prepaid Anthropic credit. In a side-by-side test on Rosco's real schedule, 3.8 Flash read every stream and subtitle correctly; 3.5 Flash-Lite put LOVEBYTE.EXE a day early (dropped as "over") and mixed up subtitles. (2026-10-14) |
 
 ## 10. Notes (parked ideas, not part of the current product)
 

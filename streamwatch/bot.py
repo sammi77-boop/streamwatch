@@ -296,12 +296,20 @@ class StreamWatch(discord.Client):
     async def read_image(self, streamer: Streamer, images: list[tuple[bytes, str, str]], post_text: str = "",
                          post_date: Optional[datetime] = None, post_id: Optional[str] = None):
         """Run the pipeline on one schedule [(bytes, media_type, filename)] and post the results."""
-        from . import ocr, reader  # heavy imports, only when an image arrives
+        from . import ocr  # heavy imports, only when an image arrives
         now = datetime.now(timezone.utc)
+        if self.config.image_reader == "claude":
+            from . import reader
 
-        async def read(model, imgs, name, tz, pdate, ptext):
-            return await reader.read_schedule(self.claude, model, imgs, name, tz, pdate, ptext,
-                                              notes=streamer.reading_notes)
+            async def read(model, imgs, name, tz, pdate, ptext):
+                return await reader.read_schedule(self.claude, model, imgs, name, tz, pdate, ptext,
+                                                  notes=streamer.reading_notes)
+        else:
+            from . import gemini_reader as reader
+            gemini = reader.GeminiReader(self.http_session, self.config.google_key_path)
+
+            async def read(model, imgs, name, tz, pdate, ptext):
+                return await gemini.read_schedule(model, imgs, name, tz, pdate, ptext, notes=streamer.reading_notes)
 
         # Keep one picture of the whole schedule (parts stitched together) to show on its cards.
         self.config.images_dir.mkdir(parents=True, exist_ok=True)
@@ -665,9 +673,13 @@ def register_commands(bot: StreamWatch) -> None:
     async def drop(interaction: discord.Interaction, image: discord.Attachment, streamer: str,
                    image2: Optional[discord.Attachment] = None, image3: Optional[discord.Attachment] = None,
                    post_text: Optional[str] = None) -> None:
-        if bot.claude is None:
+        if bot.config.image_reader == "claude" and bot.claude is None:
             await interaction.response.send_message(
                 "Image reading isn't turned on yet: add ANTHROPIC_API_KEY to the server's .env.", ephemeral=True)
+            return
+        if bot.config.image_reader != "claude" and not bot.config.google_key_path.exists():
+            await interaction.response.send_message(
+                "Image reading needs the Google service account key on the server.", ephemeral=True)
             return
         target = bot.db.find_active_streamer(streamer)
         if not target:

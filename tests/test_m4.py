@@ -370,3 +370,26 @@ class ScheduleImageTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(combined.size, (800, 1200))  # second part scaled up to 800 wide → 800 tall
         self.assertEqual(combined.getpixel((10, 10))[0] > 200, True)      # top is red
         self.assertEqual(combined.getpixel((10, 1100))[2] > 200, True)    # bottom is blue
+
+
+class GeminiParseTest(unittest.TestCase):
+    def test_parse_response(self):
+        import json
+        from streamwatch.gemini_reader import GeminiError, parse_response
+        reading = {"is_schedule": True, "entries": [{
+            "slot_date": "2026-10-15", "date": "2026-10-16", "start_time": "07:00", "timezone_as_written": "JST",
+            "title_as_written": " FIRST STAGE FABLES | DAY 6 ", "subtitle_as_written": "READY TO ROCK AND ROLLO!",
+            "is_collab": False, "collab_partners": [], "confidence": 0.95,
+            "check_time": {"timezone": "EDT", "date": "2026-10-15", "time": "18:00"}}]}
+        ok, entries = parse_response({"candidates": [{"content": {"parts": [{"text": json.dumps(reading)}]}}]})
+        self.assertTrue(ok)
+        e = entries[0]
+        self.assertEqual((e.date, e.start_time, e.timezone_as_written, e.title, e.subtitle, e.slot_date),
+                         ("2026-10-16", "07:00", "JST", "FIRST STAGE FABLES | DAY 6", "READY TO ROCK AND ROLLO!",
+                          "2026-10-15"))
+        self.assertEqual(e.other_times, [("2026-10-15", "18:00", "EDT")])
+        self.assertTrue(cross_check(e, "THU 15 JST 07:00 (FRI) EDT 6:00 PM", "America/New_York").ok)
+        with self.assertRaises(GeminiError):
+            parse_response({"candidates": [], "promptFeedback": {"blockReason": "SAFETY"}})
+        with self.assertRaises(GeminiError):
+            parse_response({"candidates": [{"content": {"parts": [{"text": "not json"}]}}]})

@@ -7,17 +7,18 @@ so the bot can only touch that calendar and the access never expires (decision 1
 from __future__ import annotations
 
 import json
-import time
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
 from urllib.parse import quote
 
 import aiohttp
-from google.auth import crypt, jwt
+
+from .gauth import GoogleAuthError, ServiceAccountToken
+from .gauth import token_claims as _token_claims
 
 API = "https://www.googleapis.com/calendar/v3"
-TOKEN_URL = "https://oauth2.googleapis.com/token"
+from .gauth import TOKEN_URL  # noqa: E402,F401  (re-exported for tests)
 SCOPE = "https://www.googleapis.com/auth/calendar.events"
 EVENT_LENGTH = timedelta(hours=2)  # decision 3: fixed 2-hour block
 
@@ -31,7 +32,7 @@ class CalendarAuthError(CalendarError):
 
 
 def token_claims(client_email: str, now: int) -> dict:
-    return {"iss": client_email, "scope": SCOPE, "aud": TOKEN_URL, "iat": now, "exp": now + 3600}
+    return _token_claims(client_email, SCOPE, now)
 
 
 class GoogleCalendar:
@@ -39,8 +40,7 @@ class GoogleCalendar:
         self.session = session
         self.key_path = key_path
         self.calendar_id = calendar_id
-        self._access_token: Optional[str] = None
-        self._expires_at = 0.0
+        self._auth = ServiceAccountToken(key_path, SCOPE)
 
     @property
     def connected(self) -> bool:
@@ -55,21 +55,10 @@ class GoogleCalendar:
             return None
 
     async def _token(self) -> str:
-        if self._access_token and time.time() < self._expires_at - 60:
-            return self._access_token
-        if not self.key_path.exists():
-            raise CalendarAuthError("service account key file is missing")
-        info = json.loads(self.key_path.read_text())
-        signer = crypt.RSASigner.from_service_account_info(info)
-        assertion = jwt.encode(signer, token_claims(info["client_email"], int(time.time()))).decode()
-        data = {"grant_type": "urn:ietf:params:oauth:grant-type:jwt-bearer", "assertion": assertion}
-        async with self.session.post(TOKEN_URL, data=data, timeout=aiohttp.ClientTimeout(total=15)) as resp:
-            body = await resp.json(content_type=None)
-        if "access_token" not in body:
-            raise CalendarAuthError(body.get("error_description") or body.get("error") or str(body))
-        self._access_token = body["access_token"]
-        self._expires_at = time.time() + int(body.get("expires_in", 3600))
-        return self._access_token
+        try:
+            return await self._auth.get(self.session)
+        except GoogleAuthError as e:
+            raise CalendarAuthError(str(e)) from e
 
     async def _call(self, method: str, path: str, *, params: dict = None, json_body: dict = None) -> Optional[dict]:
         headers = {"Authorization": f"Bearer {await self._token()}"}
@@ -79,7 +68,7 @@ class GoogleCalendar:
                 return None
             body = await resp.json(content_type=None)
             if resp.status == 401:
-                self._access_token = None
+                self._auth.invalidate()
                 raise CalendarAuthError(body.get("error", {}).get("message", "unauthorized"))
             if resp.status >= 400:
                 message = body.get("error", {}).get("message", body)
