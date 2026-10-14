@@ -49,6 +49,7 @@ CREATE TABLE IF NOT EXISTS entries (
     confidence      REAL,
     status          TEXT NOT NULL DEFAULT 'confirmed',  -- pending_review | confirmed | cancelled | discarded
     orig_tz         TEXT,                   -- timezone an image entry's time was written in
+    image_path      TEXT,                   -- saved schedule image, shown on the card
     review_message_id INTEGER,
     previous_start  TEXT,
     card_channel_id INTEGER,
@@ -79,6 +80,7 @@ MIGRATIONS = [
     ("picks", "calendar_id", "TEXT"),
     ("entries", "orig_tz", "TEXT"),
     ("entries", "review_message_id", "INTEGER"),
+    ("entries", "image_path", "TEXT"),
 ]
 
 PAUSED_FOREVER = "forever"
@@ -126,6 +128,7 @@ class Entry:
     orig_tz: Optional[str] = None
     confidence: Optional[float] = None
     review_message_id: Optional[int] = None
+    image_path: Optional[str] = None
 
 
 def _now() -> datetime:
@@ -254,12 +257,12 @@ class Database:
     def create_entry(self, streamer_id: int, start_utc: datetime, title: str, source: str,
                      video_id: Optional[str] = None, is_collab: bool = False, partners: list = (),
                      status: str = "confirmed", orig_tz: Optional[str] = None, confidence: Optional[float] = None,
-                     post_id: Optional[str] = None) -> Entry:
+                     post_id: Optional[str] = None, image_path: Optional[str] = None) -> Entry:
         cur = self.conn.execute(
             "INSERT INTO entries (streamer_id, start_utc, title, source, video_id, is_collab, partners_json, status, "
-            "orig_tz, confidence, post_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "orig_tz, confidence, post_id, image_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (streamer_id, start_utc.isoformat(), title, source, video_id, int(is_collab), json.dumps(list(partners)),
-             status, orig_tz, confidence, post_id, _now().isoformat()),
+             status, orig_tz, confidence, post_id, image_path, _now().isoformat()),
         )
         self.conn.commit()
         return self.get_entry(cur.lastrowid)
@@ -281,7 +284,7 @@ class Database:
         if "is_collab" in fields:
             fields["is_collab"] = int(fields["is_collab"])
         allowed = {"start_utc", "title", "status", "previous_start", "card_channel_id", "card_message_id",
-                   "is_collab", "partners_json", "video_id", "source", "orig_tz", "review_message_id"}
+                   "is_collab", "partners_json", "video_id", "source", "orig_tz", "review_message_id", "image_path"}
         assert set(fields) <= allowed, set(fields) - allowed
         values = [v.isoformat() if isinstance(v, datetime) else v for v in fields.values()]
         assignments = ", ".join(f"{k} = ?" for k in fields)
@@ -399,4 +402,4 @@ def _to_entry(row: sqlite3.Row) -> Entry:
                  row["status"], _dt(row["previous_start"]), row["card_channel_id"], row["card_message_id"],
                  bool(row["picked"]), bool(row["is_collab"]), json.loads(row["partners_json"] or "[]"),
                  row["calendar_id"], row["gcal_event_id"], row["orig_tz"], row["confidence"],
-                 row["review_message_id"])
+                 row["review_message_id"], row["image_path"])

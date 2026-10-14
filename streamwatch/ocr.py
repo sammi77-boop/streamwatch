@@ -39,3 +39,19 @@ def _read(image: bytes) -> str:
 
 async def read_text(image: bytes) -> str:
     return await asyncio.to_thread(_read, image)
+
+
+def stitch(images: list[bytes]) -> bytes:
+    """Parts of one schedule → one JPEG, stacked top to bottom at a common width, for showing on cards."""
+    parts = [Image.open(io.BytesIO(data)).convert("RGB") for data in images]
+    width = min(max(p.width for p in parts), 1600)
+    parts = [p.resize((width, int(p.height * width / p.width)), Image.LANCZOS) if p.width != width else p
+             for p in parts]
+    canvas = Image.new("RGB", (width, sum(p.height for p in parts)), "white")
+    y = 0
+    for p in parts:
+        canvas.paste(p, (0, y))
+        y += p.height
+    out = io.BytesIO()
+    canvas.save(out, format="JPEG", quality=85)
+    return out.getvalue()

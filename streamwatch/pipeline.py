@@ -72,8 +72,11 @@ class ImageResult:
 
 async def process_image(db: Database, streamer: Streamer, images: list[tuple[bytes, str]], read: ReadFn,
                         ocr: OcrFn, first_model: str, second_model: str, post_date: datetime, now: datetime,
-                        post_text: str = "", post_id: Optional[str] = None) -> ImageResult:
-    """One schedule, possibly split across several images (e.g. a post with two halves)."""
+                        post_text: str = "", post_id: Optional[str] = None,
+                        image_path: Optional[str] = None) -> ImageResult:
+    """One schedule, possibly split across several images (e.g. a post with two halves).
+
+    image_path is the saved (stitched) schedule image that cards show."""
     result = ImageResult()
     is_schedule, entries = await read(first_model, images, streamer.name, streamer.home_tz, post_date, post_text)
     if not is_schedule or not entries:
@@ -93,7 +96,7 @@ async def process_image(db: Database, streamer: Streamer, images: list[tuple[byt
             log.warning("Second opinion failed: %s", e)
 
     for c in checked:
-        await _place(db, streamer, c, now, post_id, result)
+        await _place(db, streamer, c, now, post_id, image_path, result)
     result.suggestion = _timezone_suggestion(db, streamer, checked)
     return result
 
@@ -115,7 +118,7 @@ def _merge_readings(first: list[CheckedEntry], second: list[CheckedEntry]) -> li
 
 
 async def _place(db: Database, streamer: Streamer, c: CheckedEntry, now: datetime, post_id: Optional[str],
-                 result: ImageResult) -> None:
+                 image_path: Optional[str], result: ImageResult) -> None:
     issues = list(c.issues)
     start, tz_label = c.start_utc, c.tz_name
     if start is None:
@@ -137,13 +140,14 @@ async def _place(db: Database, streamer: Streamer, c: CheckedEntry, now: datetim
         if not issues and existing.source == "waiting_room":
             # The waiting room already has the exact time; just note it's also on the schedule image.
             entry = db.update_entry(existing.id, source="both", is_collab=existing.is_collab or c.read.is_collab,
-                                    partners=existing.partners or c.read.partners)
+                                    partners=existing.partners or c.read.partners,
+                                    image_path=existing.image_path or image_path)
             result.events.append(Updated(entry))
         elif not issues and existing.source == "image" and existing.status == "confirmed" \
                 and abs(existing.start_utc - start) > RESCHEDULE_TOLERANCE:
             # A newer schedule moved an image-only stream.
             entry = db.update_entry(existing.id, start_utc=start, previous_start=existing.start_utc,
-                                    title=c.read.title, orig_tz=tz_label)
+                                    title=c.read.title, orig_tz=tz_label, image_path=image_path or existing.image_path)
             result.events.append(Rescheduled(entry, existing.start_utc))
         else:
             result.duplicates += 1
@@ -152,7 +156,7 @@ async def _place(db: Database, streamer: Streamer, c: CheckedEntry, now: datetim
     status = "confirmed" if not issues else "pending_review"
     entry = db.create_entry(streamer.id, start, c.read.title, "image", is_collab=c.read.is_collab,
                             partners=c.read.partners, status=status, orig_tz=tz_label,
-                            confidence=c.read.confidence, post_id=post_id)
+                            confidence=c.read.confidence, post_id=post_id, image_path=image_path)
     result.events.append(NewImageEntry(entry) if not issues else NeedsReview(entry, issues))
 
 

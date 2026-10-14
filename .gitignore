@@ -10,3 +10,4 @@ keys:.ssh/
 .DS_Store
 google_service_account.json
 client_secret*.json
+schedule_images/

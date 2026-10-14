@@ -290,3 +290,42 @@ class PipelineTest(unittest.IsolatedAsyncioTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ScheduleImageTest(unittest.IsolatedAsyncioTestCase):
+    async def test_image_entries_keep_the_schedule_image_and_cards_show_it(self):
+        from streamwatch.ui import card_embed
+        fd, path = tempfile.mkstemp(suffix=".db")
+        os.close(fd)
+        db = Database(path)
+        streamer, _ = db.add_streamer("UC1", "@vanta", "Vantacrow", "America/Los_Angeles")
+
+        async def read(model, images, name, tz, post_date, post_text):
+            return True, [entry("2026-10-16", "21:00", "Minecraft hardcore")]
+
+        async def ocr(image):
+            return OCR
+        result = await process_image(db, streamer, [(b"i", "image/png")], read, ocr, "A", "B", NOW, NOW,
+                                     image_path="/data/schedule_images/1_x.jpg")
+        card_entry = result.events[0].entry
+        self.assertEqual(card_entry.image_path, "/data/schedule_images/1_x.jpg")
+        self.assertEqual(card_embed(card_entry, streamer).thumbnail.url, "attachment://schedule.jpg")
+        # Once a waiting room matches, the video thumbnail is shown instead
+        linked = db.update_entry(card_entry.id, video_id="abc", source="both")
+        self.assertIn("ytimg.com/vi/abc", card_embed(linked, streamer).thumbnail.url)
+        db.conn.close()
+        os.remove(path)
+
+    def test_stitch_stacks_parts_at_one_width(self):
+        import io
+        from PIL import Image
+        from streamwatch.ocr import stitch
+
+        def png(w, h, color):
+            out = io.BytesIO()
+            Image.new("RGB", (w, h), color).save(out, format="PNG")
+            return out.getvalue()
+        combined = Image.open(io.BytesIO(stitch([png(800, 400, "red"), png(400, 400, "blue")])))
+        self.assertEqual(combined.size, (800, 1200))  # second part scaled up to 800 wide → 800 tall
+        self.assertEqual(combined.getpixel((10, 10))[0] > 200, True)      # top is red
+        self.assertEqual(combined.getpixel((10, 1100))[2] > 200, True)    # bottom is blue

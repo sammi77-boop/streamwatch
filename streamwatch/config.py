@@ -31,6 +31,7 @@ class Config:
     google_key_path: Path
     google_calendar_id: Optional[str]
     anthropic_api_key: Optional[str] = None
+    images_dir: Path = ROOT / "schedule_images"
 
 
 def load_config() -> Config:

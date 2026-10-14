@@ -11,6 +11,8 @@ import logging
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
+from pathlib import Path
+
 import aiohttp
 import discord
 from discord import app_commands
@@ -23,7 +25,7 @@ from .gcal import CalendarAuthError, CalendarError, GoogleCalendar, event_descri
 from .parsing import CHANNEL_URL_EXAMPLE, parse_channel_url, parse_duration, suggest_timezones, valid_timezone
 from .pipeline import NeedsReview, NewImageEntry, TimezoneSuggestion, process_image
 from .tracker import Cancelled, Event, NewWaitingRoom, Rescheduled, SurpriseLive, Updated, WentLive, apply_update
-from .ui import (CHANNELS, ConfirmReviewButton, DeleteCardButton, DiscardReviewButton, EditCardButton,
+from .ui import (CHANNELS, SCHEDULE_FILENAME, ConfirmReviewButton, DeleteCardButton, DiscardReviewButton, EditCardButton,
                  EditReviewButton, KeepTimezoneButton, PickButton, SetTimezoneButton, UnpickButton, card_embed, card_view, change_notice, live_alert,
                  review_embed, review_view, timezone_suggestion)
 from .youtube import (YouTubeError, fetch_live_video_id, fetch_rss_video_ids, fetch_videos, resolve_channel,
@@ -199,7 +201,7 @@ class StreamWatch(discord.Client):
         if isinstance(event, (NewWaitingRoom, NewImageEntry)):
             names = await self.partner_names(event.entry)
             message = await self.send("weekly-schedule", embed=card_embed(event.entry, streamer, names),
-                                      view=card_view(event.entry))
+                                      view=card_view(event.entry), **self.schedule_file(event.entry.image_path))
             if message:
                 self.db.update_entry(event.entry.id, card_channel_id=message.channel.id, card_message_id=message.id)
         elif isinstance(event, (Rescheduled, Updated, Cancelled)):
@@ -224,10 +226,15 @@ class StreamWatch(discord.Client):
         async def read(model, imgs, name, tz, pdate, ptext):
             return await reader.read_schedule(self.claude, model, imgs, name, tz, pdate, ptext)
 
+        # Keep one picture of the whole schedule (parts stitched together) to show on its cards.
+        self.config.images_dir.mkdir(parents=True, exist_ok=True)
+        image_path = self.config.images_dir / f"{streamer.id}_{now:%Y%m%d_%H%M%S}.jpg"
+        image_path.write_bytes(await asyncio.to_thread(ocr.stitch, [data for data, _, _ in images]))
+
         result = await process_image(self.db, streamer, [(data, mtype) for data, mtype, _ in images], read,
                                      ocr.read_text,
                                      reader.FIRST_READER, reader.SECOND_OPINION, post_date or now, now,
-                                     post_text, post_id)
+                                     post_text, post_id, str(image_path))
         cards = sorted((e for e in result.events if not isinstance(e, NeedsReview)),
                        key=lambda e: e.entry.start_utc)
         for event in cards:
@@ -235,9 +242,19 @@ class StreamWatch(discord.Client):
         for event in (e for e in result.events if isinstance(e, NeedsReview)):
             await self.post_review(event.entry, streamer, event.issues, images)
         if result.suggestion:
-            await self.send("bot-health", **timezone_suggestion(result.suggestion.streamer, result.suggestion.written,
-                                                                result.suggestion.iana))
+            message = timezone_suggestion(result.suggestion.streamer, result.suggestion.written,
+                                          result.suggestion.iana)
+            embed = discord.Embed(description="From this schedule image:", color=discord.Color.light_grey())
+            embed.set_image(url=f"attachment://{SCHEDULE_FILENAME}")
+            await self.send("bot-health", embed=embed, **message, **self.schedule_file(str(image_path)))
         return result
+
+    @staticmethod
+    def schedule_file(image_path: Optional[str]) -> dict:
+        """send() kwargs attaching the saved schedule image, which embeds show as attachment://schedule.jpg."""
+        if image_path and Path(image_path).exists():
+            return {"file": discord.File(image_path, filename=SCHEDULE_FILENAME)}
+        return {}
 
     async def post_review(self, entry: Entry, streamer: Streamer, issues: list[str],
                           images: list[tuple[bytes, str, str]]) -> None:

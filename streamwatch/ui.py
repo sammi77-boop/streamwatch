@@ -29,6 +29,7 @@ CHANNELS = {
     "needs-review": "Schedule entries the bot couldn't read confidently. Confirm, fix or discard them.",
     "bot-health": "Problems the bot runs into, and when they're fixed.",
 }
+SCHEDULE_FILENAME = "schedule.jpg"  # name of the schedule image attached to image cards
 SOURCE_LABELS = {"waiting_room": "Waiting room", "image": "Schedule image", "both": "Schedule image + waiting room"}
 
 
@@ -75,6 +76,8 @@ def card_embed(entry: Entry, streamer: Streamer, partner_names: list[str] = ()) 
         embed.add_field(name="🤝 With", value=", ".join(partner_names)[:1024], inline=False)
     if entry.video_id:
         embed.set_thumbnail(url=thumbnail_url(entry.video_id))
+    elif entry.image_path:
+        embed.set_thumbnail(url=f"attachment://{SCHEDULE_FILENAME}")  # the card message carries the image
     if entry.picked and entry.status != "cancelled":
         if entry.gcal_event_id:
             embed.set_footer(text="💜 On your calendar · you'll get a ping when it goes live")
