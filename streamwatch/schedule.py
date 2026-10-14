@@ -144,7 +144,8 @@ def _minutes(hhmm: str) -> int:
     return (hour % 24) * 60 + minute
 
 
-def cross_check(entry: ReadEntry, ocr_text: str, home_tz: str) -> CheckedEntry:
+def cross_check(entry: ReadEntry, ocr_text: Optional[str], home_tz: str) -> CheckedEntry:
+    """Checks one reading. ocr_text=None skips the OCR checks (the OCR step is off by default since 2026-10-14)."""
     start_utc, label, issues = to_utc(entry, home_tz)
     if start_utc is not None:
         # Same stream printed in other timezones: they must be the same moment as the main reading.
@@ -161,11 +162,12 @@ def cross_check(entry: ReadEntry, ocr_text: str, home_tz: str) -> CheckedEntry:
                           f"{t} {tz} {d}")
         # One odd row among agreeing ones is a misread of that row, not of the stream.
 
-        found = times_in_text(ocr_text)
-        if not any(_minutes(t) in found for t in [entry.start_time] + [t for _, t, _ in agreeing]):
-            issues.append(f"time {entry.start_time} not found by OCR")
-        if not date_in_text(date.fromisoformat(entry.date), ocr_text):
-            issues.append(f"date {entry.date} not found by OCR")
+        if ocr_text is not None:
+            found = times_in_text(ocr_text)
+            if not any(_minutes(t) in found for t in [entry.start_time] + [t for _, t, _ in agreeing]):
+                issues.append(f"time {entry.start_time} not found by OCR")
+            if not date_in_text(date.fromisoformat(entry.date), ocr_text):
+                issues.append(f"date {entry.date} not found by OCR")
     if entry.slot_date and entry.slot_date != entry.date and not (start_utc is not None and entry.other_times
                                                                   and not any("timezones disagree" in i for i in issues)):
         # A date off its column is fine when the check row confirms it (JST is often the next day); otherwise ask.

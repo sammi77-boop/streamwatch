@@ -321,6 +321,22 @@ class PipelineTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.events[0].entry.orig_tz, "JST")
         self.assertEqual(result.suggestion.iana, "America/New_York")
 
+    async def test_without_ocr_correct_readings_go_straight_to_the_table(self):
+        # Lucien's R.E.P.O.: small stylised text the OCR couldn't read, but Gemini's two rows agree
+        repo = ReadEntry("2026-10-17", "11:00", "JST", "R.E.P.O.", False, [], 0.95, "2026-10-17",
+                         [("2026-10-16", "22:00", "EDT")])  # same layout as Lucien's, moved after the test's "now"
+        result = await process_image(self.db, self.streamer, [(b"i", "image/png")], self.reader([repo]), None,
+                                     "A", "B", NOW, NOW)
+        self.assertEqual([type(e) for e in result.events], [NewImageEntry])
+        self.assertEqual(self.calls, ["A"])  # no second read needed
+
+    async def test_without_ocr_a_day_off_is_still_caught(self):
+        wrong = ReadEntry("2026-10-15", "07:00", "JST", "DAY 6", False, [], 0.95, "2026-10-15",
+                          [("2026-10-15", "18:00", "EDT")])
+        result = await process_image(self.db, self.streamer, [(b"i", "image/png")],
+                                     self.reader([wrong], [wrong]), None, "A", "B", NOW, NOW)
+        self.assertIsInstance(result.events[0], NeedsReview)
+
     async def test_not_a_schedule(self):
         async def read(*args):
             return False, []

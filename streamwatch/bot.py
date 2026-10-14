@@ -318,7 +318,7 @@ class StreamWatch(discord.Client):
 
         schedule_id = self.db.create_schedule(streamer.id, str(image_path))
         result = await process_image(self.db, streamer, [(data, mtype) for data, mtype, _ in images], read,
-                                     ocr.read_text,
+                                     None,  # no OCR check (removed 2026-10-14; see PRD X-2)
                                      reader.FIRST_READER, reader.SECOND_OPINION, post_date or now, now,
                                      post_text, post_id, str(image_path), schedule_id)
         # New streams go into ONE table message; changes to streams listed before update their own tables.

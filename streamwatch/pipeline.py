@@ -71,7 +71,7 @@ class ImageResult:
 
 
 async def process_image(db: Database, streamer: Streamer, images: list[tuple[bytes, str]], read: ReadFn,
-                        ocr: OcrFn, first_model: str, second_model: str, post_date: datetime, now: datetime,
+                        ocr: Optional[OcrFn], first_model: str, second_model: str, post_date: datetime, now: datetime,
                         post_text: str = "", post_id: Optional[str] = None,
                         image_path: Optional[str] = None, schedule_id: Optional[int] = None) -> ImageResult:
     """One schedule, possibly split across several images (e.g. a post with two halves).
@@ -83,7 +83,8 @@ async def process_image(db: Database, streamer: Streamer, images: list[tuple[byt
         result.is_schedule = is_schedule and bool(entries)
         return result
 
-    ocr_text = "\n".join([await ocr(data) for data, _ in images])
+    # OCR cross-check is optional: with a strong reader it flagged correct stylised text more than real mistakes.
+    ocr_text = "\n".join([await ocr(data) for data, _ in images]) if ocr else None
     checked = [cross_check(e, ocr_text, streamer.home_tz) for e in entries]
     if any(not c.ok for c in checked):
         # X-3: disagreement → second opinion from the stronger model; keep whichever reading OCR agrees with more.

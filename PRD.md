@@ -70,8 +70,8 @@ A single-user agent that **finds schedules automatically, sends the weekly sched
 | ID | Requirement |
 |---|---|
 | X-1 | **Reader A (vision LLM):** A Claude vision model returns structured JSON: `[{date, start_time, timezone_as_written, title_as_written, is_collab, collab_partners[], confidence}]`. It gets the post text and post date as context, so it can work out "Mon/Tue" to real dates. |
-| X-2 | **Reader B (free OCR):** Tesseract OCR reads the same image (upscaled and contrast-normalized first) into raw text. |
-| X-3 | **Cross-check:** Every date and time the LLM extracts must also appear in the OCR text, in some normalized form. If any field disagrees, the LLM reports low confidence, or the timezone is ambiguous, the entry goes to **`#needs-review`**. That card shows the image plus the parsed fields, with **Confirm / Edit / Discard** buttons. |
+| X-2 | ~~**Reader B (free OCR):**~~ *Removed 2026-10-14: with Gemini 3.8 Flash, OCR mostly flagged correct stylised text.*  Tesseract OCR reads the same image (upscaled and contrast-normalized first) into raw text. |
+| X-3 | **Cross-check:** the main time row (JST when printed) must agree with one other printed row (same moment), and the date must match its column unless that row confirms it. If they disagree, the reader reports low confidence, or the timezone is unknown, the entry goes to **`#needs-review`**. That card shows the image plus the parsed fields, with **Confirm / Edit / Discard** buttons. |
 | X-4 | Timezone resolution order: timezone written in the image, then the streamer's `home_tz`, then ask in review. All times are stored in UTC. |
 | X-5 | Collab detection uses keywords (collab, ft., w/, x, @mentions) plus the LLM flag. Partners come from @mentions and names in the post text or image. |
 
