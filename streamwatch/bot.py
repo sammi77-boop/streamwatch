@@ -240,6 +240,7 @@ class StreamWatch(discord.Client):
         for event in cards:
             await self.handle_event(streamer, event)
         for event in (e for e in result.events if isinstance(e, NeedsReview)):
+            log.info("Needs review: %s at %s (%s)", event.entry.title, event.entry.start_utc, "; ".join(event.issues))
             await self.post_review(event.entry, streamer, event.issues, images)
         if result.suggestion:
             message = timezone_suggestion(result.suggestion.streamer, result.suggestion.written,

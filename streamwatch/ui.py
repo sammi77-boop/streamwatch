@@ -197,24 +197,23 @@ def written_time(entry: Entry) -> Optional[str]:
 # --- #needs-review (X-3) ---
 
 def review_embed(entry: Entry, streamer: Streamer, issues: list[str], state: str = "open") -> discord.Embed:
-    titles = {"open": "🔍 Please check this stream",
+    """A stream the bot wasn't sure about: shows its best reading so one tap can confirm it.
+
+    The reasons (issues) are logged, not shown: the owner only needs the result to compare with the image."""
+    titles = {"open": "🔍 Is this right?",
               "confirmed": "✅ Confirmed: added to #weekly-schedule (use ✏️ Edit or 🗑 Delete on its card)",
               "discarded": "🗑️ Discarded"}
-    embed = discord.Embed(title=titles[state], color=AMBER if state == "open" else (GREY if state == "discarded" else
-                                                                                     PURPLE))
-    embed.set_author(name=streamer.name)
-    embed.add_field(name="Stream", value=(f"🤝 COLLAB · {entry.title}" if entry.is_collab else entry.title)[:1024],
-                    inline=False)
-    value = when(entry.start_utc)
+    stream = f"🤝 COLLAB · {entry.title}" if entry.is_collab else entry.title
+    lines = [f"**{stream}**",
+             f"📅 **{discord.utils.format_dt(entry.start_utc, 'F')}** ({discord.utils.format_dt(entry.start_utc, 'R')})"]
     written = written_time(entry)
     if written:
-        value += f"\n{written}"
-    embed.add_field(name="📅 Read as", value=value)
-    if entry.confidence is not None:
-        embed.add_field(name="Confidence", value=f"{entry.confidence:.0%}")
-    if issues and state == "open":
-        embed.add_field(name="Why it needs a check", value="\n".join(f"• {i}" for i in issues)[:1024], inline=False)
-    embed.set_footer(text="Compare with the schedule image below. Edit fixes the date, time, timezone or title.")
+        lines.append(written)
+    embed = discord.Embed(title=titles[state], description="\n".join(lines),
+                          color=AMBER if state == "open" else (GREY if state == "discarded" else PURPLE))
+    embed.set_author(name=streamer.name)
+    if state == "open":
+        embed.set_footer(text="✓ Confirm if it matches the image · ✏️ Edit to fix it · Discard if it isn't a stream")
     return embed
 
 
