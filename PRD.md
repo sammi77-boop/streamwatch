@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Owner** | sammi77-boop |
-| **Status** | v1.3: M0–M5 complete; M6 planned |
+| **Status** | v1.4: M0–M5 complete; M6 in progress (`/timezone` complete, cost decision pending) |
 | **Last updated** | 2026-10-14 |
 | **Budget** | $0 out of pocket: Google Cloud free trial credit ($300, until 2027-01-12) and free tiers |
 
@@ -49,7 +49,7 @@ A single-user agent that **finds streams from YouTube waiting rooms and communit
 11. **Pause:** `/pause [duration]` stops all checks and alerts; `/resume` starts them again.
 12. **Weekly digest:** Every Sunday evening, a digest of the coming week in `#weekly-schedule`; `/digest` shows the next 7 days on demand.
 14. **Live status:** When any listed stream starts, its card shows it is live (without a ping), and later that it has ended.
-13. **Travel (M6):** I can change my timezone with one command when I travel.
+13. **Travel:** `/timezone` changes my timezone when I travel (dropdown labels, review placement, digest time).
 
 ## 5. Functional requirements
 
@@ -119,8 +119,8 @@ All times use Discord timestamps, which render in each viewer's own timezone. Dr
 | ID | Requirement |
 |---|---|
 | T-1 | Most times are Discord timestamps, so they follow my device's timezone automatically, including when I travel. |
-| T-2 | `OWNER_TZ` (default `America/Los_Angeles`) is only used for dropdown labels and for placing timezone-less image streams in review. |
-| T-3 | **(M6)** A `/timezone` command to change `OWNER_TZ` when I travel. Automatic detection from my Google Calendar setting isn't possible: the service account can't read my account's settings. |
+| T-2 | My timezone (`OWNER_TZ`, default `America/Los_Angeles`, or the value set with `/timezone`) is used for dropdown labels, for placing timezone-less image streams in review, and for the Sunday digest time. |
+| T-3 | `/timezone [tz]` shows or changes my timezone (stored by the bot, overriding `OWNER_TZ`), with city autocomplete. Changing it redraws recent schedule tables. Automatic detection from my Google Calendar setting isn't possible: the service account can't read my account's settings. |
 
 ## 6. Architecture
 
@@ -161,7 +161,7 @@ All times use Discord timestamps, which render in each viewer's own timezone. Dr
 | YouTube blocks the VM's IP | No waiting-room updates | M0 showed no blocking; errors reported in `#bot-health` |
 | Schedule prints no timezone | Times unknown | Goes to review; timezone picked in Edit |
 | Members-only streams show up in RSS | Noise | Ignored (non-goal) |
-| Public IPv4 cost after the trial (≈$0.11/day) | Real cost from 2027 | Covered by the trial credit now; decide before 2027-01-12 (§10) |
+| Public IPv4 cost after the trial (up to ≈$3.65/month) | Real cost from 2027 | Covered by the trial credit now; confirm by SKU; IPv6-only is free (§10) |
 
 ## 8. Milestones
 | Milestone | Scope | Status |
@@ -172,7 +172,8 @@ All times use Discord timestamps, which render in each viewer's own timezone. Dr
 | M3 – Calendar | Service account with one shared calendar; add, remove, move and delete events; collab details on events | Complete |
 | M4 – Schedule images | `/drop` (up to 3 parts), Gemini 3.8 Flash, reading checks, `#needs-review`, schedule tables with calendar/edit/delete dropdowns, reading notes, waiting-room matching, live-page watch | Complete |
 | M5 – Community posts and weekly digest | Community post reading (I-6); weekly digest and `/digest`; live status on cards (L-5) | Complete |
-| M6 – Polish | `/timezone`; cost review before the trial ends | Planned |
+| M6 – Polish | `/timezone` to change my timezone when travelling | Complete |
+| | Cost decision for the public IPv4 before the trial ends (§10) | Pending: confirm the IP charge by SKU; IPv6-only test in December if charged |
 
 ## 9. Decisions log
 | # | Question | Decision |
@@ -207,6 +208,12 @@ waiting rooms are found by RSS polling every 15 minutes (I-3).
   firewall (rule `allow-youtube-websub`, ingress, 0.0.0.0/0), and restart the bot.
 
 **Cost decision before 12 Jan 2027.** The Google Cloud free trial ends then; keeping the VM requires upgrading the
-billing account. The e2-micro and 30 GB standard disk are free-tier; the public IPv4 address costs about $0.11/day
-(seen in Billing → Cost breakdown on 2026-10-14). Options: keep it (~$3.50/month), Cloud NAT (~$1/month), or test
-IPv6-only (possibly $0). Anthropic usage is prepaid credit only (keep auto-reload off).
+billing account. The e2-micro and 30 GB standard disk are always-free. Options for the public IPv4 address
+(reviewed 2026-10-14):
+- Keep it: $0.005/hour list price (about $3.65/month); whether the free-tier e2-micro is exempt is not stated in
+  Google's free-tier documentation. To be confirmed in Billing → Reports grouped by SKU ("External IP Charge").
+- Cloud NAT: not cheaper (about $4.60/month: $0.0014/hour per VM plus the gateway's own IPv4 and $0.045/GB).
+- IPv6 only: external IPv6 addresses on VMs are free. Requires verifying that Discord, YouTube, Google Calendar and
+  the Agent Platform are reachable over IPv6, and SSH access over IPv6 or through the browser. Plan: add IPv6
+  alongside IPv4 in December, verify, then remove IPv4.
+Anthropic usage is prepaid credit only (keep auto-reload off).
