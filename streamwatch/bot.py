@@ -26,7 +26,7 @@ from .gcal import CalendarAuthError, CalendarError, GoogleCalendar, event_descri
 from .parsing import CHANNEL_URL_EXAMPLE, parse_channel_url, parse_duration
 from .pipeline import NeedsReview, NewImageEntry, process_image
 from .tracker import Cancelled, Event, NewWaitingRoom, Rescheduled, SurpriseLive, Updated, WentLive, apply_update
-from . import websub
+from . import community, websub
 from .ui import (CHANNELS, SCHEDULE_FILENAME, ScheduleCalendarSelect, ScheduleDeleteSelect, ScheduleEditSelect,
                  card_channel, schedule_embed, schedule_view, ConfirmReviewButton, DeleteCardButton, DiscardReviewButton, EditCardButton,
                  EditReviewButton, PickButton, UnpickButton, card_embed, card_view, change_notice, live_alert,
@@ -34,6 +34,8 @@ from .ui import (CHANNELS, SCHEDULE_FILENAME, ScheduleCalendarSelect, ScheduleDe
 from .youtube import (YouTubeError, fetch_live_video_id, fetch_rss_video_ids, fetch_upload_ids, fetch_videos,
                       resolve_channel, resolve_handle_names)
 
+POSTS_ALERT_AFTER = 2   # 3-hourly Posts-tab reads in a row before a streamer's problem is reported
+FIRST_SCAN_MAX_AGE = timedelta(days=7)   # when a streamer is new to post reading, only this week's posts count
 FEED_ALERT_AFTER = 4  # 15-minute feed checks in a row (an hour) before a streamer's feed problem is reported
 
 MAX_IMAGE_BYTES = 5 * 1024 * 1024  # Claude's per-image limit
@@ -77,6 +79,7 @@ class StreamWatch(discord.Client):
         self.poll_count = 0
         self.youtube_ok = True
         self.feed_failures: dict[int, int] = {}   # streamer id -> feed checks failed in a row
+        self.post_failures: dict[int, int] = {}   # streamer id -> Posts-tab reads failed in a row
         self.calendar_ok = True
         self.calendar: Optional[GoogleCalendar] = None
         self.websub_server: Optional[websub.WebSubServer] = None
@@ -100,6 +103,7 @@ class StreamWatch(discord.Client):
         self.watch_pause.start()
         self.poll.start()
         self.watch_live_pages.start()
+        self.read_community_posts.start()
         await self.start_websub()
 
     async def close(self) -> None:
@@ -323,7 +327,8 @@ class StreamWatch(discord.Client):
     # --- M4: schedule images (F-3, X-1 to X-5) ---
 
     async def read_image(self, streamer: Streamer, images: list[tuple[bytes, str, str]], post_text: str = "",
-                         post_date: Optional[datetime] = None, post_id: Optional[str] = None):
+                         post_date: Optional[datetime] = None, post_id: Optional[str] = None,
+                         source_url: Optional[str] = None):
         """Run the pipeline on one schedule [(bytes, media_type, filename)] and post the results."""
         from . import ocr  # heavy imports, only when an image arrives
         now = datetime.now(timezone.utc)
@@ -345,7 +350,7 @@ class StreamWatch(discord.Client):
         image_path = self.config.images_dir / f"{streamer.id}_{now:%Y%m%d_%H%M%S}.jpg"
         image_path.write_bytes(await asyncio.to_thread(ocr.stitch, [data for data, _, _ in images]))
 
-        schedule_id = self.db.create_schedule(streamer.id, str(image_path))
+        schedule_id = self.db.create_schedule(streamer.id, str(image_path), source_url)
         result = await process_image(self.db, streamer, [(data, mtype) for data, mtype, _ in images], read,
                                      None,  # no OCR check (removed 2026-10-14; see PRD X-2)
                                      reader.FIRST_READER, reader.SECOND_OPINION, post_date or now, now,
@@ -423,6 +428,66 @@ class StreamWatch(discord.Client):
         problem = await self.unpick(entry) if entry.picked else None
         self.db.update_entry(entry_id, status="discarded")
         return problem
+
+    # --- M5: schedule images from YouTube community posts (option A: text clues only) ---
+
+    @tasks.loop(hours=3)
+    async def read_community_posts(self) -> None:
+        if self.db.is_paused() or len(self.channels) < len(CHANNELS) or not self.can_read_images():
+            return
+        for streamer in self.db.list_streamers():
+            try:
+                await self.read_posts_of(streamer)
+            except Exception:  # one streamer's odd post must not stop the others
+                log.exception("Reading posts failed for %s", streamer.name)
+
+    @read_community_posts.before_loop
+    async def _before_posts(self) -> None:
+        await self.wait_until_ready()
+        await asyncio.sleep(60)  # let the first waiting-room check finish first
+
+    def can_read_images(self) -> bool:
+        if self.config.image_reader == "claude":
+            return self.claude is not None
+        return self.config.google_key_path.exists()
+
+    async def read_posts_of(self, streamer: Streamer) -> int:
+        """New posts of one streamer: skip text without schedule words; read the rest like /drop. Returns how many."""
+        try:
+            posts = await community.fetch_posts(self.http_session, streamer.channel_id)
+        except (YouTubeError, aiohttp.ClientError, asyncio.TimeoutError, ValueError) as e:
+            failures = self.post_failures.get(streamer.id, 0) + 1
+            self.post_failures[streamer.id] = failures
+            log.warning("Posts tab failed for %s: %s", streamer.name, e)
+            if failures == POSTS_ALERT_AFTER:
+                await self.send("bot-health", content=f"⚠️ Can't read **{streamer.name}**'s YouTube posts: {e}. "
+                                                      "`/drop` still works. I'll keep retrying.")
+            return 0
+        if self.post_failures.pop(streamer.id, 0) >= POSTS_ALERT_AFTER:
+            await self.send("bot-health", content=f"✅ Reading **{streamer.name}**'s YouTube posts works again.")
+
+        first_scan = not self.db.has_posts(streamer.id)
+        seen = self.db.seen_post_ids([p.post_id for p in posts])
+        read = 0
+        for post in reversed(posts):  # oldest first, so a newer schedule wins
+            if post.post_id in seen:
+                continue
+            is_schedule = (bool(post.image_urls) and not post.members_only
+                           and community.looks_like_schedule(post.text))
+            age = community.post_age(post.published_text)
+            recent = age is not None and age <= (FIRST_SCAN_MAX_AGE if first_scan else timedelta(days=14))
+            self.db.mark_post_seen(post.post_id, streamer.id, is_schedule)
+            if not (is_schedule and recent):
+                continue
+            images = []
+            for i, url in enumerate(post.image_urls[:3]):
+                data, media_type = await community.download_image(self.http_session, url)
+                images.append((data, media_type, f"post_{i + 1}.jpg"))
+            result = await self.read_image(streamer, images, post.text, datetime.now(timezone.utc) - age,
+                                           post.post_id, f"https://www.youtube.com/post/{post.post_id}")
+            log.info("Read post %s of %s: %s", post.post_id, streamer.name, result.summary())
+            read += 1
+        return read
 
     @tasks.loop(minutes=2)
     async def watch_live_pages(self) -> None:
@@ -528,7 +593,7 @@ class StreamWatch(discord.Client):
         entries = self.db.schedule_entries(schedule_id)
         names = {e.id: await self.partner_names(e) for e in entries if e.is_collab}
         has_image = bool(schedule["image_path"]) and Path(schedule["image_path"]).exists()
-        return {"embed": schedule_embed(streamer, entries, names, has_image),
+        return {"embed": schedule_embed(streamer, entries, names, has_image, schedule["source_url"]),
                 "view": schedule_view(schedule_id, entries, self.config.owner_tz)}
 
     async def post_schedule(self, schedule_id: int) -> None:

@@ -68,6 +68,13 @@ CREATE TABLE IF NOT EXISTS schedules (
     message_id  INTEGER,
     created_at  TEXT NOT NULL
 );
+-- Community posts already looked at (M5), so each is read at most once.
+CREATE TABLE IF NOT EXISTS posts (
+    post_id     TEXT PRIMARY KEY,
+    streamer_id INTEGER NOT NULL REFERENCES streamers(id),
+    is_schedule INTEGER NOT NULL,
+    seen_at     TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS picks (
     entry_id      INTEGER PRIMARY KEY REFERENCES entries(id),
     gcal_event_id TEXT,
@@ -96,6 +103,7 @@ MIGRATIONS = [
     ("streamers", "reading_notes", "TEXT"),
     ("entries", "schedule_id", "INTEGER"),
     ("entries", "subtitle", "TEXT"),
+    ("schedules", "source_url", "TEXT"),
 ]
 
 PAUSED_FOREVER = "forever"
@@ -313,11 +321,29 @@ class Database:
         self.conn.commit()
         return self.get_entry(entry_id)
 
+    # --- community posts (M5) ---
+
+    def has_posts(self, streamer_id: int) -> bool:
+        return self.conn.execute("SELECT 1 FROM posts WHERE streamer_id = ? LIMIT 1", (streamer_id,)).fetchone() is not None
+
+    def seen_post_ids(self, post_ids: list[str]) -> set[str]:
+        if not post_ids:
+            return set()
+        rows = self.conn.execute(f"SELECT post_id FROM posts WHERE post_id IN ({','.join('?' * len(post_ids))})",
+                                 post_ids).fetchall()
+        return {r["post_id"] for r in rows}
+
+    def mark_post_seen(self, post_id: str, streamer_id: int, is_schedule: bool) -> None:
+        self.conn.execute("INSERT OR IGNORE INTO posts (post_id, streamer_id, is_schedule, seen_at) VALUES (?, ?, ?, ?)",
+                          (post_id, streamer_id, int(is_schedule), _now().isoformat()))
+        self.conn.commit()
+
     # --- schedule tables (one message per dropped schedule) ---
 
-    def create_schedule(self, streamer_id: int, image_path: Optional[str]) -> int:
-        cur = self.conn.execute("INSERT INTO schedules (streamer_id, image_path, created_at) VALUES (?, ?, ?)",
-                                (streamer_id, image_path, _now().isoformat()))
+    def create_schedule(self, streamer_id: int, image_path: Optional[str], source_url: Optional[str] = None) -> int:
+        cur = self.conn.execute(
+            "INSERT INTO schedules (streamer_id, image_path, source_url, created_at) VALUES (?, ?, ?, ?)",
+            (streamer_id, image_path, source_url, _now().isoformat()))
         self.conn.commit()
         return cur.lastrowid
 

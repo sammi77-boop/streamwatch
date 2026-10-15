@@ -385,14 +385,17 @@ def _schedule_line(entry: Entry, partner_names: list[str]) -> str:
 
 
 def schedule_embed(streamer: Streamer, entries: list[Entry], names: dict[int, list[str]],
-                   has_image: bool) -> discord.Embed:
+                   has_image: bool, source_url: Optional[str] = None) -> discord.Embed:
     """The summary table: one line per stream in the viewer's local time, title and subtitle, collab partners."""
     lines = [_schedule_line(e, names.get(e.id, [])) for e in entries] or ["*No upcoming streams from this schedule.*"]
     embed = discord.Embed(title=f"📅 {streamer.name} · schedule", description="\n\n".join(lines)[:4096],
-                          color=PURPLE if any(e.picked for e in entries) else GREY)
+                          color=PURPLE if any(e.picked for e in entries) else GREY, url=source_url)
     if has_image:
         embed.set_image(url=f"attachment://{SCHEDULE_FILENAME}")
-    embed.set_footer(text="Times are in your timezone · 💜 = on your calendar")
+    footer = "Times are in your timezone · 💜 = on your calendar"
+    if source_url:
+        footer = "From their YouTube post (title links to it) · " + footer
+    embed.set_footer(text=footer)
     return embed
 
 

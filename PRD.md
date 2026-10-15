@@ -38,7 +38,7 @@ A single-user agent that **finds streams from YouTube waiting rooms automaticall
 ## 4. User stories
 1. **Follow:** I run `/follow <channel URL>` and the agent starts tracking that streamer.
 2. **Waiting rooms:** When a followed streamer creates a waiting room, a card appears in `#waiting-rooms` with the time in my timezone and an **Add to calendar** button.
-3. **Schedule images:** I `/drop` a schedule image (up to 3 parts) and get ONE table in `#schedule-images`: each stream's time in my timezone, title and subtitle, and collab partners, with a dropdown to add streams to my calendar.
+3. **Schedule images:** I `/drop` a schedule image (up to 3 parts), or a streamer posts one on YouTube, and I get ONE table in `#schedule-images`: each stream's time in my timezone, title and subtitle, and collab partners, with a dropdown to add streams to my calendar.
 4. **Collabs:** Collabs are marked 🤝 with partner names, from the image, the waiting room title or its description.
 5. **Pick:** Adding a stream creates a Google Calendar event in my Stream Watch calendar.
 6. **Go-live (picked):** When a stream I picked goes live, I get a 💜 ping in `#go-live` within 5 min.
@@ -64,6 +64,7 @@ A single-user agent that **finds streams from YouTube waiting rooms automaticall
 | ID | Requirement |
 |---|---|
 | I-3 | **Every 15 min**, read each followed channel's RSS feed (free) for new video IDs; if a channel's feed fails, use the API uploads list instead (1 quota unit, includes upcoming waiting rooms). Then `videos.list` (1 quota unit per 50 videos) for status, scheduled start, title and description. Premieres and old VODs are ignored. A streamer's first scan never fires alerts for streams already live. |
+| I-6 | **Community posts (M5, option A):** every 3 h, read each followed channel's Posts tab page (no API exists for posts). A new post with images, not members-only, whose text has a schedule word (schedule, this week, スケジュール, 予定…) or four weekday names is read like `/drop` (all its images as one schedule); its table links to the post. Posts are read once; a streamer's first scan only reads posts from the last 7 days. Failures are reported after two reads in a row, once. |
 | I-4 | **Matching:** image entries and waiting rooms for the same streamer within ±90 min (plus title similarity, or a lone candidate within ±30 min) are the same stream; the waiting room's exact time and title win. |
 | I-4a | **Ignore free-chat rooms:** waiting rooms scheduled more than 30 days ahead or titled "free chat" / "フリーチャット". |
 | I-5 | Each channel is checked on its own, so one failing doesn't stop the others. A channel that can't be read either way for an hour is reported once in `#bot-health`, and once when it recovers. |
@@ -147,6 +148,7 @@ All times use Discord timestamps, which show in each viewer's own timezone. Drop
 - `picks(entry_id, calendar_id, gcal_event_id, picked_at)`
 - `alerts(video_id, kind[picked|surprise], sent_at)`
 - `handle_names(handle, name)`: cached channel names for collab partners
+- `posts(post_id, streamer_id, is_schedule, seen_at)`: community posts already looked at
 - `settings(key, value)`: pause state and similar
 
 ## 7. Risks & mitigations
@@ -165,7 +167,7 @@ All times use Discord timestamps, which show in each viewer's own timezone. Drop
 2. **M2 – Waiting rooms + go-live** ✅ RSS + `videos.list`, cards, picked and surprise alerts, reschedule/cancel, free-chat filter.
 3. **M3 – Calendar** ✅ Service account and one shared calendar; add/remove/move/delete events; collab info on events.
 4. **M4 – Schedule images** ✅ `/drop` (up to 3 parts), Gemini 3.8 Flash, checks, `#needs-review`, one table per schedule with calendar/edit/delete dropdowns, reading notes, waiting-room matching, live-page watch.
-5. **M5 – Sunday digest** (planned) The coming week in `#weekly-schedule`. Optionally: reading YouTube community posts automatically.
+5. **M5 – Community posts + Sunday digest** Community posts ✅ (I-6, option A). Sunday digest in `#weekly-schedule` (next).
 6. **M6 – Polish** (planned) `/timezone`, cost check before the trial ends.
 
 ## 9. Decisions log
