@@ -94,6 +94,16 @@ Private server, single member (me). Channels:
 
 All times use Discord timestamps, which render in each viewer's own timezone. Dropdown labels cannot, and use `OWNER_TZ` instead.
 
+**Visual conventions.** Markers used consistently in Discord and on calendar events:
+
+| Marker | Meaning | Where it appears |
+|---|---|---|
+| 💜 (purple) | A stream I picked; on my calendar | Picked cards and table lines, `#go-live` alerts, calendar event titles |
+| ❣️ (pink) | A surprise stream: live without any schedule | `#surprise-live` alerts |
+| 🤝 | A collab, followed by partner names | Cards, table lines, review cards, calendar event titles |
+| ⏳ | A stream awaiting confirmation in `#needs-review` | Table lines |
+| Amber | A reading that needs review | `#needs-review` cards |
+
 ### 5.5 Google Calendar
 | ID | Requirement |
 |---|---|
