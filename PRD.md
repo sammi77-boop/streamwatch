@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Owner** | sammi77-boop |
-| **Status** | v1.4: M0–M5 complete; M6 in progress (`/timezone` complete, cost decision pending) |
+| **Status** | v1.5: M0–M6 complete |
 | **Last updated** | 2026-10-14 |
 | **Budget** | $0 out of pocket: Google Cloud free trial credit ($300, until 2027-01-12) and free tiers |
 
@@ -161,7 +161,7 @@ All times use Discord timestamps, which render in each viewer's own timezone. Dr
 | YouTube blocks the VM's IP | No waiting-room updates | M0 showed no blocking; errors reported in `#bot-health` |
 | Schedule prints no timezone | Times unknown | Goes to review; timezone picked in Edit |
 | Members-only streams show up in RSS | Noise | Ignored (non-goal) |
-| Public IPv4 cost after the trial (up to ≈$3.65/month) | Real cost from 2027 | Covered by the trial credit now; confirm by SKU; IPv6-only is free (§10) |
+| Gemini usage after the trial (≈$0.10–$1/month) | Small real cost from 2027 | Covered by the trial credit now; in January, keep it or switch automatic image reading off (§10) |
 
 ## 8. Milestones
 | Milestone | Scope | Status |
@@ -173,7 +173,7 @@ All times use Discord timestamps, which render in each viewer's own timezone. Dr
 | M4 – Schedule images | `/drop` (up to 3 parts), Gemini 3.8 Flash, reading checks, `#needs-review`, schedule tables with calendar/edit/delete dropdowns, reading notes, waiting-room matching, live-page watch | Complete |
 | M5 – Community posts and weekly digest | Community post reading (I-6); weekly digest and `/digest`; live status on cards (L-5) | Complete |
 | M6 – Polish | `/timezone` to change my timezone when travelling | Complete |
-| | Cost decision for the public IPv4 before the trial ends (§10) | Pending: confirm the IP charge by SKU; IPv6-only test in December if charged |
+| | Cost review: per-SKU costs confirmed; the VM and its IP stay free after the trial (§10) | Complete |
 
 ## 9. Decisions log
 | # | Question | Decision |
@@ -196,6 +196,7 @@ All times use Discord timestamps, which render in each viewer's own timezone. Dr
 | 16 | What if YouTube's RSS feeds fail? | Fall back to the API uploads list per channel (seen 2026-10-14: every channel's RSS returned 404 for hours). Report a channel only after an hour of failing, once. |
 | 17 | How are community posts filtered? | Option A: only posts whose text contains schedule words (or four weekday names) are sent to the image reader; no model call is used just to classify a post. (2026-10-14) |
 | 18 | Unpicked streams that go live? | No ping (L-2), but the card turns red and shows it is live (L-5), so live streams are visible without extra notifications. (2026-10-14) |
+| 19 | Is the public IP charged? | No: Billing by SKU shows "External IP Charge on a Standard VM" at $0.00 for the free-tier e2-micro, so the IPv4 stays and no IPv6 change is needed. (2026-10-14) |
 
 ## 10. Notes (deferred items, not part of the current product)
 
@@ -207,13 +208,12 @@ waiting rooms are found by RSS polling every 15 minutes (I-3).
 - To turn it back on: add `WEBSUB_ENABLED=1` to the server's `.env`, open TCP port 8080 in the Google Cloud
   firewall (rule `allow-youtube-websub`, ingress, 0.0.0.0/0), and restart the bot.
 
-**Cost decision before 12 Jan 2027.** The Google Cloud free trial ends then; keeping the VM requires upgrading the
-billing account. The e2-micro and 30 GB standard disk are always-free. Options for the public IPv4 address
-(reviewed 2026-10-14):
-- Keep it: $0.005/hour list price (about $3.65/month); whether the free-tier e2-micro is exempt is not stated in
-  Google's free-tier documentation. To be confirmed in Billing → Reports grouped by SKU ("External IP Charge").
-- Cloud NAT: not cheaper (about $4.60/month: $0.0014/hour per VM plus the gateway's own IPv4 and $0.045/GB).
-- IPv6 only: external IPv6 addresses on VMs are free. Requires verifying that Discord, YouTube, Google Calendar and
-  the Agent Platform are reachable over IPv6, and SSH access over IPv6 or through the browser. Plan: add IPv6
-  alongside IPv4 in December, verify, then remove IPv4.
+**Costs after the free trial (confirmed 2026-10-14, Billing → Reports by SKU).** The free trial ends on
+2027-01-12; keeping the VM requires upgrading the billing account. Confirmed per SKU:
+- e2-micro VM, 30 GB standard disk, Ubuntu Minimal licence: $0 (always-free; billed with "free tier discount").
+- External IP on the VM: $0.00 for 8.62 hours of use (would be $0.04 at list price), so no IPv6 change is needed.
+- Network Intelligence Center resource hours: shown in billing but fully discounted.
+- Gemini 3.8 Flash on Agent Platform: the only real cost after the trial, about $0.01–$0.02 per schedule read
+  (roughly $0.10–$1 per month). Decision for January: keep automatic image reading, or switch it off and use `/drop` only.
+- Rejected options: Cloud NAT is not cheaper (about $4.60/month); IPv6-only is unnecessary since the IPv4 is free.
 Anthropic usage is prepaid credit only (keep auto-reload off).
