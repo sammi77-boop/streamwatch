@@ -371,6 +371,14 @@ class Database:
         rows = self.conn.execute(sql, (streamer_id, *statuses)).fetchall()
         return [self.get_entry(r["id"]) for r in rows]
 
+    def entries_between(self, start: datetime, end: datetime) -> list[Entry]:
+        """Confirmed streams of followed streamers starting in [start, end): the weekly digest's contents."""
+        rows = self.conn.execute(
+            "SELECT e.id FROM entries e JOIN streamers s ON s.id = e.streamer_id WHERE s.active = 1 "
+            "AND e.status = 'confirmed' AND e.start_utc >= ? AND e.start_utc < ? ORDER BY e.start_utc",
+            (start.astimezone(timezone.utc).isoformat(), end.astimezone(timezone.utc).isoformat())).fetchall()
+        return [self.get_entry(r["id"]) for r in rows]
+
     def picked_unlinked_entries(self, start_from: datetime, start_to: datetime) -> list[Entry]:
         """L-2b: picked image-only streams starting in a window, to watch their /live page."""
         rows = self.conn.execute(

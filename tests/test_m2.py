@@ -6,8 +6,8 @@ import unittest
 from datetime import datetime, timedelta, timezone
 
 from streamwatch.db import Database
-from streamwatch.tracker import (Cancelled, NewWaitingRoom, Rescheduled, SurpriseLive, WentLive, apply_update,
-                                 is_free_chat)
+from streamwatch.tracker import (Cancelled, LiveChanged, NewWaitingRoom, Rescheduled, SurpriseLive, WentLive,
+                                 apply_update, is_free_chat)
 from streamwatch.youtube import VideoInfo, parse_rss_video_ids, parse_video_item
 
 NOW = datetime(2026, 10, 14, 12, 0, tzinfo=timezone.utc)
@@ -44,13 +44,13 @@ class TrackerTest(unittest.TestCase):
         entry = self.update("v1", video())[0].entry
         self.db.set_picked(entry.id, True)
         events = self.update("v1", video(broadcast="live", actual=NOW))
-        self.assertEqual(len(events), 1)
-        self.assertIsInstance(events[0], WentLive)
+        self.assertEqual([type(e) for e in events], [LiveChanged, WentLive])  # card redrawn + ping
         self.assertEqual(self.update("v1", video(broadcast="live", actual=NOW)), [])  # L-3
 
     def test_unpicked_scheduled_stream_does_not_alert(self):
         self.update("v1", video())
-        self.assertEqual(self.update("v1", video(broadcast="live", actual=NOW)), [])
+        # Only the card turns LIVE NOW; no ping (L-2)
+        self.assertEqual([type(e) for e in self.update("v1", video(broadcast="live", actual=NOW))], [LiveChanged])
 
     def test_unannounced_stream_is_a_surprise_once(self):
         events = self.update("v9", video("v9", broadcast="live", start=None, actual=NOW))
@@ -95,7 +95,8 @@ class TrackerTest(unittest.TestCase):
         entry = self.update("v1", video())[0].entry
         self.db.set_picked(entry.id, True)
         self.update("v1", video(broadcast="live", actual=NOW))
-        self.assertEqual(self.update("v1", video(broadcast="none", actual=NOW)), [])
+        # Ending redraws the card as ended; it isn't a cancellation
+        self.assertEqual([type(e) for e in self.update("v1", video(broadcast="none", actual=NOW))], [LiveChanged])
         self.assertEqual(self.db.get_entry(entry.id).status, "confirmed")
         self.assertEqual(self.db.video_ids_to_poll(), [])
 
@@ -166,3 +167,21 @@ class MigrationTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class LiveCardTest(unittest.TestCase):
+    def test_live_and_ended_cards(self):
+        from streamwatch.db import Entry, Streamer
+        from streamwatch.ui import RED, card_embed, card_view
+        entry = Entry(19, 1, NOW, "【#FSFables 03】IT'S TIME TO GO ON A HUNT", "waiting_room", "UOdSb9fsC8c", "confirmed",
+                      None, None, None, False)
+        malim = Streamer(1, "UC1", "@malim", "Malim Cendari", "UTC", True, True)
+        live = card_embed(entry, malim, [], ("live", NOW))
+        self.assertTrue(live.title.startswith("🔴 LIVE NOW · "))
+        self.assertEqual(live.color, RED)                      # the card's stripe turns red
+        self.assertEqual([b.label for b in card_view(entry, ("live", NOW)).children], ["▶ Watch"])
+        ended = card_embed(entry, malim, [], ("ended", NOW))
+        self.assertTrue(ended.title.startswith("Ended · "))
+        self.assertEqual([b.label for b in card_view(entry, ("ended", NOW)).children], ["▶ Watch the replay"])
+        upcoming = card_embed(entry, malim, [], None)          # before it starts: the normal card
+        self.assertFalse(upcoming.title.startswith("🔴"))

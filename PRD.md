@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Owner** | sammi77-boop |
-| **Status** | v1.2: M0–M4 complete; M5 in progress (community posts complete, weekly digest pending); M6 planned |
+| **Status** | v1.3: M0–M5 complete; M6 planned |
 | **Last updated** | 2026-10-14 |
 | **Budget** | $0 out of pocket: Google Cloud free trial credit ($300, until 2027-01-12) and free tiers |
 
@@ -47,7 +47,8 @@ A single-user agent that **finds streams from YouTube waiting rooms and communit
 9. **Review:** If the agent isn't confident about an image reading, it shows its best guess in `#needs-review` for Confirm / Edit / Discard.
 10. **Fix mistakes:** I can edit or delete any stream that came from an image (time, timezone, title).
 11. **Pause:** `/pause [duration]` stops all checks and alerts; `/resume` starts them again.
-12. **Weekly digest (M5):** Every Sunday evening, a digest of the coming week in `#weekly-schedule`.
+12. **Weekly digest:** Every Sunday evening, a digest of the coming week in `#weekly-schedule`; `/digest` shows the next 7 days on demand.
+14. **Live status:** When any listed stream starts, its card shows it is live (without a ping), and later that it has ended.
 13. **Travel (M6):** I can change my timezone with one command when I travel.
 
 ## 5. Functional requirements
@@ -56,7 +57,7 @@ A single-user agent that **finds streams from YouTube waiting rooms and communit
 | ID | Requirement |
 |---|---|
 | F-1 | `/follow <channel URL>` accepts `youtube.com/@handle` and `youtube.com/channel/UC…` links and resolves the channel with `channels.list` (1 quota unit). Autocomplete options identify streamers by channel ID, so unusual characters in display names cannot cause mismatches. |
-| F-2 | `/unfollow <name>`, `/list` (marks streamers that have a reading note), `/reading_note`, `/pause [duration]` (e.g. `3d`, resumes automatically) and `/resume`. While paused, no checks, cards or alerts are produced; calendar events are kept; the bot stays online to receive `/resume`. |
+| F-2 | `/unfollow <name>`, `/list` (marks streamers that have a reading note), `/digest` (next 7 days), `/reading_note`, `/pause [duration]` (e.g. `3d`, resumes automatically) and `/resume`. While paused, no checks, cards or alerts are produced; calendar events are kept; the bot stays online to receive `/resume`. |
 | F-3 | `/drop image [image2] [image3] streamer [post_text]` reads a schedule image (or one split across up to 3 images, stitched for display). |
 | F-4 | `/reading_note <streamer> [note]` stores how to read a streamer's schedules (e.g. Rosco: "6 PM \| 9 PM" is start and end of one stream). Sent to the image reader; overrides the general rules. Empty note clears it. |
 
@@ -84,12 +85,12 @@ Private server, single member (me). Channels:
 
 | Channel | What it's for |
 |---|---|
-| `#waiting-rooms` | One card per stream found from a YouTube waiting room: start time in my timezone, title, 🤝 collab partners, thumbnail, and **💜 Add to calendar** / **▶ Open** buttons. Once added, the card is marked **💜 ON YOUR CALENDAR** and offers **Remove from calendar**. |
+| `#waiting-rooms` | One card per stream found from a YouTube waiting room: start time in my timezone, title, 🤝 collab partners, thumbnail, and **💜 Add to calendar** / **▶ Open** buttons. Once added, the card is marked **💜 ON YOUR CALENDAR** and offers **Remove from calendar**. When the stream starts, the card turns red with **🔴 LIVE NOW** and a **▶ Watch** button; afterwards it shows **Ended** with a replay link. |
 | `#schedule-images` | One table message per schedule (submitted or from a community post): each stream's start time in my timezone, title and subtitle, 🤝 collab partners, 💜 if on my calendar, ⏳ if awaiting review; the schedule image; and three dropdowns: **💜 Add to calendar** (select to add, deselect to remove), **✏️ Edit a stream** (date, hour, minute, timezone, title) and **🗑 Delete a stream**. |
 | `#needs-review` | 🔍 Uncertain readings: the bot's best interpretation, the image, and **✓ Confirm / ✏️ Edit / Discard**. Confirmed streams are added to their table. |
 | `#go-live` | 💜 Ping when a stream I picked goes live |
 | `#surprise-live` | ❣️ Ping when a followed streamer goes live without a schedule |
-| `#weekly-schedule` | 📅 Weekly digest of the coming week (M5, pending) |
+| `#weekly-schedule` | 📅 Weekly digest every Sunday 20:00 (`OWNER_TZ`) covering the coming Monday–Sunday: one section per day with time, streamer, title and subtitle, 🤝 partners, 💜 if on my calendar, and a link to each stream's card or table. A missed Sunday run is sent Monday morning; each week is sent once. |
 | `#bot-health` | ⚠️ Operational problems (YouTube access, calendar access) and ✅ their recovery |
 
 All times use Discord timestamps, which render in each viewer's own timezone. Dropdown labels cannot, and use `OWNER_TZ` instead.
@@ -111,6 +112,7 @@ All times use Discord timestamps, which render in each viewer's own timezone. Dr
 | L-2a | **Picked image stream with no waiting room:** if the streamer goes live within ±90 min of it, it's treated as that stream (alert in `#go-live`, not `#surprise-live`). |
 | L-2b | **Live-page watch:** from 10 min before a picked image-only stream until 90 min after, check the streamer's `/live` page every 2 min (free, no quota). |
 | L-3 | Each alert fires only once per video. |
+| L-5 | **Live status without a ping:** when any listed stream starts or ends, its card (or table line) is redrawn as live or ended, whether or not it was picked. |
 | L-4 | Quota stays well under 10,000 units/day (≈300 units/day expected, up to ≈1,200 while RSS is down). Never `search.list` (100 units per call). |
 
 ### 5.7 My timezone
@@ -169,8 +171,7 @@ All times use Discord timestamps, which render in each viewer's own timezone. Dr
 | M2 – Waiting rooms and go-live | RSS with API fallback, `videos.list`, waiting-room cards, picked and surprise alerts, reschedule and cancellation handling, free-chat filter | Complete |
 | M3 – Calendar | Service account with one shared calendar; add, remove, move and delete events; collab details on events | Complete |
 | M4 – Schedule images | `/drop` (up to 3 parts), Gemini 3.8 Flash, reading checks, `#needs-review`, schedule tables with calendar/edit/delete dropdowns, reading notes, waiting-room matching, live-page watch | Complete |
-| M5 – Community posts and weekly digest | Community post reading (I-6) | Complete |
-| | Weekly digest in `#weekly-schedule` | Pending |
+| M5 – Community posts and weekly digest | Community post reading (I-6); weekly digest and `/digest`; live status on cards (L-5) | Complete |
 | M6 – Polish | `/timezone`; cost review before the trial ends | Planned |
 
 ## 9. Decisions log
@@ -193,6 +194,7 @@ All times use Discord timestamps, which render in each viewer's own timezone. Dr
 | 15 | How fast must waiting rooms appear? | RSS every 15 min is enough; the instant push version was built and parked (§10). (2026-10-14) |
 | 16 | What if YouTube's RSS feeds fail? | Fall back to the API uploads list per channel (seen 2026-10-14: every channel's RSS returned 404 for hours). Report a channel only after an hour of failing, once. |
 | 17 | How are community posts filtered? | Option A: only posts whose text contains schedule words (or four weekday names) are sent to the image reader; no model call is used just to classify a post. (2026-10-14) |
+| 18 | Unpicked streams that go live? | No ping (L-2), but the card turns red and shows it is live (L-5), so live streams are visible without extra notifications. (2026-10-14) |
 
 ## 10. Notes (deferred items, not part of the current product)
 

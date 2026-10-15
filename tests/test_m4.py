@@ -263,8 +263,8 @@ class PipelineTest(unittest.IsolatedAsyncioTestCase):
         self.db.set_picked(result.events[0].entry.id, True)
         live = VideoInfo("v3", "UC1", "hardcore minecraft!!", "live", None,
                          datetime(2026, 10, 17, 4, 5, tzinfo=timezone.utc), False)
-        events = apply_update(self.db, self.streamer, "v3", live, NOW)
-        self.assertIsInstance(events[0], WentLive)
+        events = [e for e in apply_update(self.db, self.streamer, "v3", live, NOW) if isinstance(e, WentLive)]
+        self.assertEqual(len(events), 1)
         self.assertEqual(events[0].entry.id, result.events[0].entry.id)
 
     async def test_unrelated_live_stream_is_still_a_surprise(self):

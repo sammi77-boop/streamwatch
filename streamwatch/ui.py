@@ -55,8 +55,26 @@ def when(dt: datetime) -> str:
     return f"{discord.utils.format_dt(dt, 'F')}\n{discord.utils.format_dt(dt, 'R')}"
 
 
-def card_embed(entry: Entry, streamer: Streamer, partner_names: list[str] = ()) -> discord.Embed:
+def card_embed(entry: Entry, streamer: Streamer, partner_names: list[str] = (),
+               live: Optional[tuple[str, Optional[datetime]]] = None) -> discord.Embed:
+    """live: ("live", started_at) or ("ended", started_at) once the stream has started; the card says so (no ping)."""
     title = f"🤝 COLLAB · {entry.title}" if entry.is_collab else entry.title
+    if live and live[0] == "live" and entry.status != "cancelled":
+        embed = discord.Embed(title=f"🔴 LIVE NOW · {title}"[:256], color=RED, url=watch_url(entry.video_id))
+        embed.set_author(name=streamer.name)
+        if live[1]:
+            embed.add_field(name="🔴 Started", value=discord.utils.format_dt(live[1], "R"))
+        if partner_names:
+            embed.add_field(name="🤝 With", value=", ".join(partner_names)[:1024], inline=False)
+        embed.set_thumbnail(url=thumbnail_url(entry.video_id))
+        return embed
+    if live and live[0] == "ended" and entry.status != "cancelled":
+        embed = discord.Embed(title=f"Ended · {title}"[:256], color=DARK, url=watch_url(entry.video_id))
+        embed.set_author(name=streamer.name)
+        if live[1]:
+            embed.add_field(name="Streamed", value=discord.utils.format_dt(live[1], "F"))
+        embed.set_thumbnail(url=thumbnail_url(entry.video_id))
+        return embed
     if entry.status == "cancelled":
         color, title = DARK, f"✖ Cancelled · {title}"
     elif entry.previous_start:
@@ -95,8 +113,12 @@ def card_embed(entry: Entry, streamer: Streamer, partner_names: list[str] = ()) 
     return embed
 
 
-def card_view(entry: Entry) -> discord.ui.View:
+def card_view(entry: Entry, live: Optional[tuple[str, Optional[datetime]]] = None) -> discord.ui.View:
     view = discord.ui.View(timeout=None)
+    if live and entry.video_id and entry.status != "cancelled":
+        label = "▶ Watch" if live[0] == "live" else "▶ Watch the replay"
+        view.add_item(discord.ui.Button(label=label, style=discord.ButtonStyle.link, url=watch_url(entry.video_id)))
+        return view
     if entry.status != "cancelled":
         if entry.picked:
             label = "✓ On calendar" if entry.gcal_event_id else "✓ Picked"
@@ -139,9 +161,7 @@ class _OwnerButton:
             return
         await interaction.response.defer()  # calendar calls can take a few seconds
         problem = await (bot.pick(entry) if picked else bot.unpick(entry))
-        entry = bot.db.get_entry(entry.id)
-        embed = card_embed(entry, bot.db.get_streamer(entry.streamer_id), await bot.partner_names(entry))
-        await interaction.edit_original_response(embed=embed, view=card_view(entry))
+        await interaction.edit_original_response(**await bot.card_parts(bot.db.get_entry(entry.id)))
         if problem:
             await interaction.followup.send(problem, ephemeral=True)
 
@@ -369,12 +389,16 @@ class DeleteCardButton(_OwnerButton, discord.ui.DynamicItem[discord.ui.Button], 
 
 # --- #schedule-images: one table message per dropped schedule ---
 
-def _schedule_line(entry: Entry, partner_names: list[str]) -> str:
+def _schedule_line(entry: Entry, partner_names: list[str], live: Optional[str] = None) -> str:
     title = f"**{entry.title}**" + (f" · *{entry.subtitle}*" if entry.subtitle else "")
     when_text = f"**{discord.utils.format_dt(entry.start_utc, 'F')}**"
     if entry.status == "cancelled":
         return f"~~{when_text}: {title}~~ ✖ cancelled"
     line = f"{when_text}: {title}"
+    if live == "live":
+        line += f" 🔴 **[LIVE NOW]({watch_url(entry.video_id)})**"
+    elif live == "ended":
+        line += " · *ended*"
     if entry.picked:
         line += " 💜"
     if entry.status == "pending_review":
@@ -385,9 +409,12 @@ def _schedule_line(entry: Entry, partner_names: list[str]) -> str:
 
 
 def schedule_embed(streamer: Streamer, entries: list[Entry], names: dict[int, list[str]],
-                   has_image: bool, source_url: Optional[str] = None) -> discord.Embed:
+                   has_image: bool, source_url: Optional[str] = None,
+                   live: Optional[dict[int, str]] = None) -> discord.Embed:
     """The summary table: one line per stream in the viewer's local time, title and subtitle, collab partners."""
-    lines = [_schedule_line(e, names.get(e.id, [])) for e in entries] or ["*No upcoming streams from this schedule.*"]
+    live = live or {}
+    lines = ([_schedule_line(e, names.get(e.id, []), live.get(e.id)) for e in entries]
+             or ["*No upcoming streams from this schedule.*"])
     embed = discord.Embed(title=f"📅 {streamer.name} · schedule", description="\n\n".join(lines)[:4096],
                           color=PURPLE if any(e.picked for e in entries) else GREY, url=source_url)
     if has_image:

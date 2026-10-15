@@ -46,11 +46,17 @@ class WentLive:
 
 
 @dataclass
+class LiveChanged:
+    """A listed stream started or ended: its card or table line is redrawn (no ping)."""
+    entry: Entry
+
+
+@dataclass
 class SurpriseLive:
     video: VideoInfo
 
 
-Event = Union[NewWaitingRoom, Rescheduled, Updated, Cancelled, WentLive, SurpriseLive]
+Event = Union[NewWaitingRoom, Rescheduled, Updated, Cancelled, WentLive, SurpriseLive, LiveChanged]
 
 
 def is_free_chat(info: VideoInfo, now: datetime) -> bool:
@@ -125,6 +131,8 @@ def apply_update(db: Database, streamer: Streamer, video_id: str, info: Optional
             if entry is not None:
                 entry = db.update_entry(entry.id, video_id=video_id, source="both")
         if entry is not None:
+            if previous is None or previous.broadcast != "live":
+                events.append(LiveChanged(entry))  # card shows LIVE NOW, picked or not
             if entry.picked and db.record_alert(video_id, "picked"):
                 events.append(WentLive(entry, info))
             # L-2: scheduled but not picked → no alert.
@@ -132,6 +140,9 @@ def apply_update(db: Database, streamer: Streamer, video_id: str, info: Optional
             # No entry means it was never seen as a waiting room, so nobody scheduled it.
             if db.record_alert(video_id, "surprise"):
                 events.append(SurpriseLive(info))
+
+    elif info.broadcast == "none" and previous and previous.broadcast == "live" and entry is not None:
+        events.append(LiveChanged(entry))  # the stream ended
 
     elif info.broadcast == "none" and previous and previous.broadcast == "upcoming" and info.actual_start is None:
         # The waiting room was turned back into a normal video without ever going live.

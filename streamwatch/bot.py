@@ -25,8 +25,9 @@ from .collab import short_channel_name
 from .gcal import CalendarAuthError, CalendarError, GoogleCalendar, event_description, event_title
 from .parsing import CHANNEL_URL_EXAMPLE, parse_channel_url, parse_duration
 from .pipeline import NeedsReview, NewImageEntry, process_image
-from .tracker import Cancelled, Event, NewWaitingRoom, Rescheduled, SurpriseLive, Updated, WentLive, apply_update
-from . import community, websub
+from .tracker import (Cancelled, Event, LiveChanged, NewWaitingRoom, Rescheduled, SurpriseLive, Updated, WentLive,
+                      apply_update)
+from . import community, digest, websub
 from .ui import (CHANNELS, SCHEDULE_FILENAME, ScheduleCalendarSelect, ScheduleDeleteSelect, ScheduleEditSelect,
                  card_channel, schedule_embed, schedule_view, ConfirmReviewButton, DeleteCardButton, DiscardReviewButton, EditCardButton,
                  EditReviewButton, PickButton, UnpickButton, card_embed, card_view, change_notice, live_alert,
@@ -104,6 +105,7 @@ class StreamWatch(discord.Client):
         self.poll.start()
         self.watch_live_pages.start()
         self.read_community_posts.start()
+        self.weekly_digest.start()
         await self.start_websub()
 
     async def close(self) -> None:
@@ -241,9 +243,8 @@ class StreamWatch(discord.Client):
 
     async def handle_event(self, streamer: Streamer, event: Event) -> None:
         if isinstance(event, (NewWaitingRoom, NewImageEntry)):
-            names = await self.partner_names(event.entry)
-            message = await self.send(card_channel(event.entry), embed=card_embed(event.entry, streamer, names),
-                                      view=card_view(event.entry), **self.schedule_file(event.entry.image_path))
+            message = await self.send(card_channel(event.entry), **await self.card_parts(event.entry),
+                                      **self.schedule_file(event.entry.image_path))
             if message:
                 self.db.update_entry(event.entry.id, card_channel_id=message.channel.id, card_message_id=message.id)
         elif isinstance(event, (Rescheduled, Updated, Cancelled)):
@@ -252,6 +253,8 @@ class StreamWatch(discord.Client):
             if event.entry.picked and not isinstance(event, Updated):
                 old = event.old_start if isinstance(event, Rescheduled) else None
                 await self.send(card_channel(event.entry), content=change_notice(event.entry, streamer, old))
+        elif isinstance(event, LiveChanged):
+            await self.refresh_card(event.entry, streamer)
         elif isinstance(event, WentLive):
             await self.send("go-live", **live_alert(streamer, event.video, self.config.owner_id, surprise=False))
         elif isinstance(event, SurpriseLive):
@@ -489,6 +492,46 @@ class StreamWatch(discord.Client):
             read += 1
         return read
 
+    # --- M5: weekly digest (decision 2) ---
+
+    def jump_url(self, entry: Entry) -> Optional[str]:
+        """Link to where the stream can be added to the calendar: its card, or its schedule table."""
+        if entry.schedule_id:
+            schedule = self.db.get_schedule(entry.schedule_id)
+            channel_id, message_id = (schedule["channel_id"], schedule["message_id"]) if schedule else (None, None)
+        else:
+            channel_id, message_id = entry.card_channel_id, entry.card_message_id
+        if channel_id and message_id:
+            return f"https://discord.com/channels/{self.config.guild_id}/{channel_id}/{message_id}"
+        return None
+
+    async def digest_message(self, start: datetime, end: datetime, heading: str) -> dict:
+        items = []
+        for entry in self.db.entries_between(start, end):
+            streamer = self.db.get_streamer(entry.streamer_id)
+            names = await self.partner_names(entry) if entry.is_collab else []
+            items.append(digest.DigestLine(entry, streamer.name, names, self.jump_url(entry)))
+        return digest.build_digest(items, start, end, heading)
+
+    @tasks.loop(minutes=10)
+    async def weekly_digest(self) -> None:
+        """Sunday 20:00 (OWNER_TZ) → the coming Monday–Sunday, once per week; Monday morning catches a missed run."""
+        if self.db.is_paused() or "weekly-schedule" not in self.channels:
+            return
+        now_local = digest.owner_now(self.config.owner_tz, datetime.now(timezone.utc))
+        monday = digest.digest_due(now_local)
+        if monday is None or self.db.get_setting("last_digest_week") == monday.isoformat():
+            return
+        start = datetime.combine(monday, datetime.min.time(), tzinfo=now_local.tzinfo)
+        await self.send("weekly-schedule", **await self.digest_message(start, start + timedelta(days=7),
+                                                                       "Your week ahead"))
+        self.db.set_setting("last_digest_week", monday.isoformat())
+        log.info("Weekly digest sent for the week of %s", monday)
+
+    @weekly_digest.before_loop
+    async def _before_digest(self) -> None:
+        await self.wait_until_ready()
+
     @tasks.loop(minutes=2)
     async def watch_live_pages(self) -> None:
         """L-2b: picked streams with no waiting room: check the /live page from 10 min before start to 90 min after."""
@@ -587,13 +630,28 @@ class StreamWatch(discord.Client):
 
     # --- schedule tables in #schedule-images ---
 
+    def live_state(self, entry: Entry) -> Optional[tuple[str, Optional[datetime]]]:
+        """("live", started) / ("ended", started) for a stream that has started, else None."""
+        video = self.db.get_video(entry.video_id) if entry.video_id else None
+        if video is None or video.actual_start is None:
+            return None
+        return ("live" if video.broadcast == "live" else "ended"), video.actual_start
+
+    async def card_parts(self, entry: Entry) -> dict:
+        """embed + view for a waiting-room card, reflecting picks and live status."""
+        streamer = self.db.get_streamer(entry.streamer_id)
+        live = self.live_state(entry)
+        return {"embed": card_embed(entry, streamer, await self.partner_names(entry), live),
+                "view": card_view(entry, live)}
+
     async def schedule_message_kwargs(self, schedule_id: int) -> dict:
         schedule = self.db.get_schedule(schedule_id)
         streamer = self.db.get_streamer(schedule["streamer_id"])
         entries = self.db.schedule_entries(schedule_id)
         names = {e.id: await self.partner_names(e) for e in entries if e.is_collab}
         has_image = bool(schedule["image_path"]) and Path(schedule["image_path"]).exists()
-        return {"embed": schedule_embed(streamer, entries, names, has_image, schedule["source_url"]),
+        live = {e.id: state[0] for e in entries if (state := self.live_state(e))}
+        return {"embed": schedule_embed(streamer, entries, names, has_image, schedule["source_url"], live),
                 "view": schedule_view(schedule_id, entries, self.config.owner_tz)}
 
     async def post_schedule(self, schedule_id: int) -> None:
@@ -643,8 +701,7 @@ class StreamWatch(discord.Client):
         if channel is None:
             return
         try:
-            embed = card_embed(entry, streamer, await self.partner_names(entry))
-            await channel.get_partial_message(entry.card_message_id).edit(embed=embed, view=card_view(entry))
+            await channel.get_partial_message(entry.card_message_id).edit(**await self.card_parts(entry))
         except discord.NotFound:
             log.info("Card for entry %s was deleted; not refreshing", entry.id)
 
@@ -733,6 +790,13 @@ def register_commands(bot: StreamWatch) -> None:
         current = current.lower()
         return [app_commands.Choice(name=s.name[:100], value=s.channel_id)
                 for s in bot.db.list_streamers() if current in s.name.lower()][:25]
+
+    @tree.command(name="digest", description="Show the streams of the next 7 days")
+    async def digest_cmd(interaction: discord.Interaction) -> None:
+        now = datetime.now(timezone.utc)
+        await interaction.response.send_message(**await bot.digest_message(
+            digest.owner_now(bot.config.owner_tz, now), digest.owner_now(bot.config.owner_tz, now + timedelta(days=7)),
+            "Next 7 days"))
 
     @tree.command(name="list", description="Show followed streamers and whether the bot is paused")
     async def list_cmd(interaction: discord.Interaction) -> None:
