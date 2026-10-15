@@ -150,3 +150,13 @@ async def fetch_live_video_id(session: aiohttp.ClientSession, channel_id: str) -
         if resp.status != 200:
             raise YouTubeError(f"/live page HTTP {resp.status} for {channel_id}")
         return parse_live_page(await resp.text())
+
+
+async def fetch_upload_ids(session: aiohttp.ClientSession, api_key: str, channel_id: str, limit: int = 15) -> list[str]:
+    """Backup for RSS: the channel's uploads playlist via the API (1 quota unit). Includes upcoming waiting rooms."""
+    params = {"part": "contentDetails", "playlistId": "UU" + channel_id[2:], "maxResults": limit, "key": api_key}
+    async with session.get(f"{API}/playlistItems", params=params, timeout=aiohttp.ClientTimeout(total=20)) as resp:
+        data = await resp.json(content_type=None)
+        if resp.status != 200:
+            raise YouTubeError(data.get("error", {}).get("message", f"uploads HTTP {resp.status}"))
+    return [item["contentDetails"]["videoId"] for item in data.get("items", [])]

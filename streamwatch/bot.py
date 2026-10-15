@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import io
 import logging
+from xml.etree import ElementTree
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
@@ -30,8 +31,10 @@ from .ui import (CHANNELS, SCHEDULE_FILENAME, ScheduleCalendarSelect, ScheduleDe
                  card_channel, schedule_embed, schedule_view, ConfirmReviewButton, DeleteCardButton, DiscardReviewButton, EditCardButton,
                  EditReviewButton, PickButton, UnpickButton, card_embed, card_view, change_notice, live_alert,
                  review_embed, review_view)
-from .youtube import (YouTubeError, fetch_live_video_id, fetch_rss_video_ids, fetch_videos, resolve_channel,
-                      resolve_handle_names)
+from .youtube import (YouTubeError, fetch_live_video_id, fetch_rss_video_ids, fetch_upload_ids, fetch_videos,
+                      resolve_channel, resolve_handle_names)
+
+FEED_ALERT_AFTER = 4  # 15-minute feed checks in a row (an hour) before a streamer's feed problem is reported
 
 MAX_IMAGE_BYTES = 5 * 1024 * 1024  # Claude's per-image limit
 IMAGE_TYPES = {"image/png", "image/jpeg", "image/webp", "image/gif"}
@@ -73,6 +76,7 @@ class StreamWatch(discord.Client):
         self.channels_lock = asyncio.Lock()
         self.poll_count = 0
         self.youtube_ok = True
+        self.feed_failures: dict[int, int] = {}   # streamer id -> feed checks failed in a row
         self.calendar_ok = True
         self.calendar: Optional[GoogleCalendar] = None
         self.websub_server: Optional[websub.WebSubServer] = None
@@ -177,7 +181,9 @@ class StreamWatch(discord.Client):
         scanned: list[Streamer] = []
         if read_rss:
             for streamer in streamers.values():
-                ids = await fetch_rss_video_ids(self.http_session, streamer.channel_id)
+                ids = await self.latest_video_ids(streamer)
+                if ids is None:
+                    continue  # this channel couldn't be read; the others still are
                 for vid in set(ids) - self.db.known_video_ids(ids):
                     owner[vid] = streamer
                 scanned.append(streamer)
@@ -205,6 +211,29 @@ class StreamWatch(discord.Client):
         for streamer, event in events:
             await self.handle_event(streamer, event)
         log.info("Checked %d videos (rss=%s): %d events", len(to_check), read_rss, len(events))
+
+    async def latest_video_ids(self, streamer: Streamer) -> Optional[list[str]]:
+        """A channel's newest videos: RSS (free), or the API uploads list (1 unit) when RSS fails.
+
+        Returns None if neither works. A problem is reported once after an hour, and once when it's fixed."""
+        try:
+            ids = await fetch_rss_video_ids(self.http_session, streamer.channel_id)
+        except (YouTubeError, aiohttp.ClientError, asyncio.TimeoutError, ElementTree.ParseError) as rss_error:
+            try:
+                ids = await fetch_upload_ids(self.http_session, self.config.youtube_api_key, streamer.channel_id)
+                log.info("RSS failed for %s (%s); used the API uploads list", streamer.name, rss_error)
+            except (YouTubeError, aiohttp.ClientError, asyncio.TimeoutError) as api_error:
+                failures = self.feed_failures.get(streamer.id, 0) + 1
+                self.feed_failures[streamer.id] = failures
+                log.warning("Can't list videos for %s: RSS %s; API %s", streamer.name, rss_error, api_error)
+                if failures == FEED_ALERT_AFTER:
+                    await self.send("bot-health", content=(
+                        f"⚠️ Can't check **{streamer.name}** for new waiting rooms (for an hour now): {api_error}. "
+                        "I'll keep retrying."))
+                return None
+        if self.feed_failures.pop(streamer.id, 0) >= FEED_ALERT_AFTER:
+            await self.send("bot-health", content=f"✅ Checking **{streamer.name}** for waiting rooms works again.")
+        return ids
 
     async def handle_event(self, streamer: Streamer, event: Event) -> None:
         if isinstance(event, (NewWaitingRoom, NewImageEntry)):

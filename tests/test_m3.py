@@ -220,3 +220,60 @@ class ScheduleTableTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(calendar.options), 2)  # pending D9 isn't offered yet
         self.assertEqual([o.default for o in calendar.options], [True, False])
         self.assertTrue(calendar.options[0].label.startswith("Thu 15 Oct 1:00 PM"))  # 20:00 UTC in PDT
+
+
+class FeedFallbackTest(unittest.IsolatedAsyncioTestCase):
+    """One channel's broken RSS must not stop the others, and the API uploads list is used instead."""
+
+    async def asyncSetUp(self):
+        import streamwatch.bot as botmod
+        self.botmod = botmod
+        fd, self.path = tempfile.mkstemp(suffix=".db")
+        os.close(fd)
+        self.bot = StreamWatch(Config("x", 1, 42, "k", self.path, Path("/nonexistent"), None))
+        self.sent = []
+
+        async def fake_send(channel_name, **kwargs):
+            self.sent.append(kwargs.get("content"))
+        self.bot.send = fake_send
+        self.a, _ = self.bot.db.add_streamer("UCaaa", "@a", "Alpha")
+        self.b, _ = self.bot.db.add_streamer("UCbbb", "@b", "Bravo")
+        self.originals = (botmod.fetch_rss_video_ids, botmod.fetch_upload_ids, botmod.fetch_videos)
+        self.api_ok = True
+
+        async def rss(session, channel_id):
+            if channel_id == "UCaaa":
+                raise botmod.YouTubeError("RSS HTTP 404 for UCaaa")
+            return ["vb1"]
+
+        async def uploads(session, key, channel_id):
+            if not self.api_ok:
+                raise botmod.YouTubeError("quota exceeded")
+            return ["va1"]
+
+        async def videos(session, key, ids):
+            return {}
+        botmod.fetch_rss_video_ids, botmod.fetch_upload_ids, botmod.fetch_videos = rss, uploads, videos
+
+    async def asyncTearDown(self):
+        self.botmod.fetch_rss_video_ids, self.botmod.fetch_upload_ids, self.botmod.fetch_videos = self.originals
+        self.bot.db.conn.close()
+        os.remove(self.path)
+
+    async def test_api_backup_when_rss_fails(self):
+        self.assertEqual(await self.bot.latest_video_ids(self.a), ["va1"])
+        self.assertEqual(await self.bot.latest_video_ids(self.b), ["vb1"])
+        await self.bot.run_checks(read_rss=True)  # completes without the noisy "can't reach YouTube"
+        self.assertEqual(self.sent, [])
+
+    async def test_reported_once_after_an_hour_then_once_when_fixed(self):
+        self.api_ok = False
+        for _ in range(6):
+            await self.bot.latest_video_ids(self.a)
+        self.assertEqual(len(self.sent), 1)
+        self.assertIn("Can't check **Alpha**", self.sent[0])
+        self.api_ok = True
+        await self.bot.latest_video_ids(self.a)
+        await self.bot.latest_video_ids(self.a)
+        self.assertEqual(len(self.sent), 2)
+        self.assertIn("works again", self.sent[1])

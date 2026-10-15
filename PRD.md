@@ -11,7 +11,7 @@
 
 ## 1. Problem
 
-I follow multiple YouTube streamers and spend too much time tracking their schedules, yet still miss streams. Weekly schedules are posted as images (mostly on X, sometimes in YouTube community posts) at unpredictable times. I have to check each channel, read the schedule, convert time zones, and remember when to tune in.
+I follow multiple YouTube streamers and spend too much time tracking their schedules, yet still miss streams. Weekly schedules are posted as images at unpredictable times. I have to check each channel, read the schedule, convert time zones, and remember when to tune in.
 
 ## 2. Goal
 
@@ -28,7 +28,7 @@ A single-user agent that **finds streams from YouTube waiting rooms automaticall
 | Clarity | From a card or table line alone, I can tell who, when (my time), what, and whether it's a collab in ≤ 5 seconds |
 
 ## 3. Non-goals (v1)
-- Twitch, automatic X reading, or any platform other than YouTube (X schedules go through `/drop`; see §10 Notes)
+- Any platform other than YouTube
 - Members-only streams
 - Multi-user support, accounts, or a web dashboard
 - VOD, clip, Shorts, or premiere tracking
@@ -57,16 +57,16 @@ A single-user agent that **finds streams from YouTube waiting rooms automaticall
 |---|---|
 | F-1 | `/follow <channel URL>` accepts `youtube.com/@handle` and `youtube.com/channel/UC…` links and resolves the channel with `channels.list` (1 quota unit). Autocomplete lists match streamers by channel ID, so odd characters in names can't break them. |
 | F-2 | `/unfollow <name>`, `/list` (shows 📝 for streamers with a reading note), `/reading_note`, `/pause [duration]` (e.g. `3d`, resumes automatically) and `/resume`. While paused, no checks, cards or alerts; calendar events stay; the bot keeps running to receive `/resume`. |
-| F-3 | `/drop image [image2] [image3] streamer [post_text]` reads a schedule image (or one split across up to 3 images, stitched for display). The way to add X schedules. |
+| F-3 | `/drop image [image2] [image3] streamer [post_text]` reads a schedule image (or one split across up to 3 images, stitched for display). |
 | F-4 | `/reading_note <streamer> [note]` stores how to read a streamer's schedules (e.g. Rosco: "6 PM \| 9 PM" is start and end of one stream). Sent to the image reader; overrides the general rules. Empty note clears it. |
 
 ### 5.2 Waiting rooms
 | ID | Requirement |
 |---|---|
-| I-3 | **Every 15 min**, read each followed channel's RSS feed (free) for new video IDs, then call `videos.list` (1 quota unit per 50 videos) for status, scheduled start, title and description. Premieres and old VODs are ignored. A streamer's first scan never fires alerts for streams already live. |
+| I-3 | **Every 15 min**, read each followed channel's RSS feed (free) for new video IDs; if a channel's feed fails, use the API uploads list instead (1 quota unit, includes upcoming waiting rooms). Then then `videos.list` (1 quota unit per 50 videos) for status, scheduled start, title and description. Premieres and old VODs are ignored. A streamer's first scan never fires alerts for streams already live. |
 | I-4 | **Matching:** image entries and waiting rooms for the same streamer within ±90 min (plus title similarity, or a lone candidate within ±30 min) are the same stream; the waiting room's exact time and title win. |
 | I-4a | **Ignore free-chat rooms:** waiting rooms scheduled more than 30 days ahead or titled "free chat" / "フリーチャット". |
-| I-5 | YouTube errors are reported once in `#bot-health`, and again when they recover. |
+| I-5 | Each channel is checked on its own, so one failing doesn't stop the others. A channel that can't be read either way for an hour is reported once in `#bot-health`, and once when it recovers. |
 
 ### 5.3 Reading schedule images
 | ID | Requirement |
@@ -110,7 +110,7 @@ All times use Discord timestamps, which show in each viewer's own timezone. Drop
 | L-2a | **Picked image stream with no waiting room:** if the streamer goes live within ±90 min of it, it's treated as that stream (alert in `#go-live`, not `#surprise-live`). |
 | L-2b | **Live-page watch:** from 10 min before a picked image-only stream until 90 min after, check the streamer's `/live` page every 2 min (free, no quota). |
 | L-3 | Each alert fires only once per video. |
-| L-4 | Quota stays well under 10,000 units/day (≈300 units/day expected). Never `search.list` (100 units per call). |
+| L-4 | Quota stays well under 10,000 units/day (≈300 units/day expected, up to ≈1,200 while RSS is down). Never `search.list` (100 units per call). |
 
 ### 5.7 My timezone
 | ID | Requirement |
@@ -186,6 +186,7 @@ All times use Discord timestamps, which show in each viewer's own timezone. Drop
 | 13 | OCR cross-check? | Removed. With Gemini 3.8 Flash, Tesseract mostly flagged correct stylised text; the reader's own timezone rows are the check now. (2026-10-14) |
 | 14 | How are schedule images shown? | One table message per schedule with a calendar dropdown, instead of one card per stream; times, title · subtitle, collab partners (English). (2026-10-14) |
 | 15 | How fast must waiting rooms appear? | RSS every 15 min is enough; the instant push version was built and parked (§10). (2026-10-14) |
+| 16 | What if YouTube's RSS feeds fail? | Fall back to the API uploads list per channel (seen 2026-10-14: every channel's RSS returned 404 for hours). Report a channel only after an hour of failing, once. |
 
 ## 10. Notes (parked ideas, not part of the current product)
 
@@ -196,10 +197,6 @@ waiting rooms are found by RSS polling every 15 minutes (I-3).
   subscriptions renew every 2 days. Free (no quota until a pushed video is looked up).
 - To turn it back on: add `WEBSUB_ENABLED=1` to the server's `.env`, open TCP port 8080 in the Google Cloud
   firewall (rule `allow-youtube-websub`, ingress, 0.0.0.0/0), and restart the bot.
-
-**Reading schedules from X.** Most streamers post schedules on X. Considered on 2026-10-14 and left out for now:
-the official X API is pay-per-use (about $0.005 per post read since Feb 2026), and FxTwitter can read a single post
-from its link for free. Today, X schedules go through `/drop`.
 
 **Cost decision before 12 Jan 2027.** The Google Cloud free trial ends then; keeping the VM requires upgrading the
 billing account. The e2-micro and 30 GB standard disk are free-tier; the public IPv4 address costs about $0.11/day
