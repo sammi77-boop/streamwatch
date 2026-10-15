@@ -84,25 +84,15 @@ Private server, single member (me). Channels:
 
 | Channel | What it's for |
 |---|---|
-| `#waiting-rooms` | One card per stream found from a YouTube waiting room: start time in my timezone, title, collab partners, thumbnail, and **Add to calendar** / **Open** buttons. Once added, the card is marked "On your calendar" and offers **Remove from calendar**. |
-| `#schedule-images` | One table message per schedule (submitted or from a community post): each stream's start time in my timezone, title and subtitle, collab partners, and markers for streams on my calendar or awaiting review; the schedule image; and three dropdowns: **Add to calendar** (select to add, deselect to remove), **Edit a stream** (date, hour, minute, timezone, title) and **Delete a stream**. |
-| `#needs-review` | Uncertain readings: the bot's best interpretation, the image, and **Confirm / Edit / Discard**. Confirmed streams are added to their table. |
-| `#go-live` | Ping when a stream I picked goes live |
-| `#surprise-live` | Distinctly styled ping when a followed streamer goes live without a schedule |
-| `#weekly-schedule` | Weekly digest of the coming week (M5, pending) |
-| `#bot-health` | Operational problems (YouTube access, calendar access) and their recovery |
+| `#waiting-rooms` | One card per stream found from a YouTube waiting room: start time in my timezone, title, 🤝 collab partners, thumbnail, and **💜 Add to calendar** / **▶ Open** buttons. Once added, the card is marked **💜 ON YOUR CALENDAR** and offers **Remove from calendar**. |
+| `#schedule-images` | One table message per schedule (submitted or from a community post): each stream's start time in my timezone, title and subtitle, 🤝 collab partners, 💜 if on my calendar, ⏳ if awaiting review; the schedule image; and three dropdowns: **💜 Add to calendar** (select to add, deselect to remove), **✏️ Edit a stream** (date, hour, minute, timezone, title) and **🗑 Delete a stream**. |
+| `#needs-review` | 🔍 Uncertain readings: the bot's best interpretation, the image, and **✓ Confirm / ✏️ Edit / Discard**. Confirmed streams are added to their table. |
+| `#go-live` | 💜 Ping when a stream I picked goes live |
+| `#surprise-live` | ❣️ Ping when a followed streamer goes live without a schedule |
+| `#weekly-schedule` | 📅 Weekly digest of the coming week (M5, pending) |
+| `#bot-health` | ⚠️ Operational problems (YouTube access, calendar access) and ✅ their recovery |
 
 All times use Discord timestamps, which render in each viewer's own timezone. Dropdown labels cannot, and use `OWNER_TZ` instead.
-
-**Visual conventions.** Markers used consistently in Discord and on calendar events:
-
-| Marker | Meaning | Where it appears |
-|---|---|---|
-| 💜 (purple) | A stream I picked; on my calendar | Picked cards and table lines, `#go-live` alerts, calendar event titles |
-| ❣️ (pink) | A surprise stream: live without any schedule | `#surprise-live` alerts |
-| 🤝 | A collab, followed by partner names | Cards, table lines, review cards, calendar event titles |
-| ⏳ | A stream awaiting confirmation in `#needs-review` | Table lines |
-| Amber | A reading that needs review | `#needs-review` cards |
 
 ### 5.5 Google Calendar
 | ID | Requirement |
