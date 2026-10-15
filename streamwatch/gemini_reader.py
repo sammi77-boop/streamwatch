@@ -1,6 +1,6 @@
-"""Reader A on Gemini (Vertex AI, billed to the Google Cloud project, so the free-trial credit covers it).
+"""Reader A on Gemini via Gemini Enterprise Agent Platform (formerly Vertex AI; billed to the Google Cloud project, so the free-trial credit covers it).
 
-Same instructions and output as the Claude reader (prompts.py); Vertex AI enforces the JSON shape with a
+Same instructions and output as the Claude reader (prompts.py); Agent Platform enforces the JSON shape with a
 response schema. Gemini 3.8 Flash reads every image: in a side-by-side test on a real schedule, 3.5 Flash-Lite
 put a stream a day early (both rows consistently, so no check caught it) and mixed up subtitles, while 3.8 Flash
 read all of it correctly. Both are paid from the Google Cloud credit. A second read uses the same model.

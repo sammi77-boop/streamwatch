@@ -72,7 +72,7 @@ A single-user agent that **finds streams from YouTube waiting rooms automaticall
 ### 5.3 Reading schedule images
 | ID | Requirement |
 |---|---|
-| X-1 | **Reader:** Gemini 3.8 Flash on Vertex AI (paid from the Google Cloud credit) returns structured JSON per stream: column date, date, start time, timezone as written, title, subtitle, collab flag and partners, confidence, and one check row. Claude remains a fallback (`IMAGE_READER=claude`). |
+| X-1 | **Reader:** Gemini 3.8 Flash on Gemini Enterprise Agent Platform (formerly Vertex AI; paid from the Google Cloud credit) returns structured JSON per stream: column date, date, start time, timezone as written, title, subtitle, collab flag and partners, confidence, and one check row. Claude remains a fallback (`IMAGE_READER=claude`). |
 | X-2 | **Timezone row:** when the image prints JST, use the JST row with its own date (apply markers like "(FRI)"); otherwise the row matching the column. Read only one other row, to confirm the date. Two titles with "time \| time" are two streams; one title means use the first time; per-streamer reading notes override. |
 | X-3 | **Checks (no OCR):** the main row and the check row must be the same moment; the date must match its column unless the check row confirms it; confidence ≥ 80%; timezone recognised; not more than 3 weeks away. A failed check gets one more read; per stream, the reading that passes is kept. Anything still failing goes to `#needs-review`, showing the bot's best reading. |
 | X-4 | **Timezone:** only what's printed on the image, converted to my timezone; stored in UTC. If none is printed, the stream goes to review (placed provisionally in my timezone) and Edit's timezone dropdown sets it. |
@@ -126,7 +126,7 @@ All times use Discord timestamps, which show in each viewer's own timezone. Drop
  YouTube RSS + videos.list ──(15 min / 5 min)──┐
  YouTube /live page (picked image streams) ────┤
                                                ▼
- /drop image ──► Gemini 3.8 Flash (Vertex AI) ──► checks + time conversion (code)
+ /drop image ──► Gemini 3.8 Flash (Agent Platform) ──► checks + time conversion (code)
                                                │
                                      SQLite (one file)
                                                │
@@ -137,8 +137,8 @@ All times use Discord timestamps, which show in each viewer's own timezone. Drop
 
 - **Runtime:** one always-on Python process (discord.py with its task loops), systemd service `streamwatch`, SQLite as the only store.
 - **Hosting:** Google Cloud e2-micro VM (`streamwatch`, us-west1-b, Ubuntu 24.04 Minimal, 30 GB standard disk), free tier plus trial credit. Polling (no inbound ports).
-- **AI:** Gemini 3.8 Flash via Vertex AI ("Agent Platform API"), paid from the Google Cloud credit (decision 11).
-- **Secrets (on the VM only, readable by its user):** Discord bot token, YouTube API key, Google service account key (Calendar + Vertex AI), Anthropic API key (fallback only, unused).
+- **AI:** Gemini 3.8 Flash via Gemini Enterprise Agent Platform (formerly Vertex AI; API "Agent Platform API", `aiplatform.googleapis.com`), paid from the Google Cloud credit (decision 11).
+- **Secrets (on the VM only, readable by its user):** Discord bot token, YouTube API key, Google service account key (Calendar + Agent Platform), Anthropic API key (fallback only, unused).
 
 ### Data model
 - `streamers(id, channel_id, handle, name, active, bootstrapped, reading_notes)` (old `home_tz` column unused)
@@ -183,7 +183,7 @@ All times use Discord timestamps, which show in each viewer's own timezone. Drop
 | 8 | When do streamers post schedules? Do they create waiting rooms? | No fixed pattern for either; don't assume waiting rooms exist. |
 | 9 | Permanent free-chat waiting rooms | Found during M0 (@kugaleo_Q's room is dated 2028). Ignored by rule I-4a. |
 | 10 | How does the bot get calendar access? | A **service account** that I share one calendar with. Publishing an OAuth app needs a website and privacy policy on an owned domain, and testing-mode tokens expire every 7 days. (2026-10-14) |
-| 11 | Which model reads schedule images? | **Gemini 3.8 Flash** via Vertex AI, billed to the Google Cloud trial credit instead of prepaid Anthropic credit. In a side-by-side test on Rosco's real schedule, 3.8 Flash read every stream and subtitle correctly; 3.5 Flash-Lite put LOVEBYTE.EXE a day early (dropped as "over") and mixed up subtitles. (2026-10-14) |
+| 11 | Which model reads schedule images? | **Gemini 3.8 Flash** via Gemini Enterprise Agent Platform (formerly Vertex AI), billed to the Google Cloud trial credit instead of prepaid Anthropic credit. In a side-by-side test on Rosco's real schedule, 3.8 Flash read every stream and subtitle correctly; 3.5 Flash-Lite put LOVEBYTE.EXE a day early (dropped as "over") and mixed up subtitles. (2026-10-14) |
 | 12 | Streamer home timezones? | Removed. Waiting rooms give exact times and schedule images print their timezone (JST first), converted to mine. Images with no timezone go to review. (2026-10-14) |
 | 13 | OCR cross-check? | Removed. With Gemini 3.8 Flash, Tesseract mostly flagged correct stylised text; the reader's own timezone rows are the check now. (2026-10-14) |
 | 14 | How are schedule images shown? | One table message per schedule with a calendar dropdown, instead of one card per stream; times, title · subtitle, collab partners (English). (2026-10-14) |

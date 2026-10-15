@@ -1,4 +1,4 @@
-"""Access tokens for the bot's Google service account (Calendar, Gemini on Vertex AI)."""
+"""Access tokens for the bot's Google service account (Calendar, Gemini on Agent Platform)."""
 
 from __future__ import annotations
 
