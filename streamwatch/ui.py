@@ -287,7 +287,7 @@ class EditReviewButton(_OwnerButton, discord.ui.DynamicItem[discord.ui.Button], 
         if entry is None or entry.status != "pending_review":
             await interaction.response.send_message("This one was already handled.", ephemeral=True)
             return
-        await interaction.response.send_modal(EditEntryModal(entry, bot.config.owner_tz))
+        await interaction.response.send_modal(EditEntryModal(entry, bot.owner_tz))
 
 
 EDIT_TIMEZONES = [  # (label shown, value understood by resolve_timezone)
@@ -367,7 +367,7 @@ class EditCardButton(_OwnerButton, discord.ui.DynamicItem[discord.ui.Button], te
         if entry is None or entry.status != "confirmed":
             await interaction.response.send_message("This stream can't be edited any more.", ephemeral=True)
             return
-        await interaction.response.send_modal(EditEntryModal(entry, bot.config.owner_tz))
+        await interaction.response.send_modal(EditEntryModal(entry, bot.owner_tz))
 
 
 class DeleteCardButton(_OwnerButton, discord.ui.DynamicItem[discord.ui.Button], template=r"sw:card-del:(?P<id>\d+)"):
@@ -455,7 +455,7 @@ class _OwnerSelect(_OwnerButton):
         bot: StreamWatch = interaction.client  # type: ignore[assignment]
         schedule_id = int(match["id"])
         return cls(schedule_id, [e for e in bot.db.schedule_entries(schedule_id) if e.status == "confirmed"],
-                   bot.config.owner_tz)
+                   bot.owner_tz)
 
     @staticmethod
     def chosen(interaction: discord.Interaction) -> list[int]:
@@ -491,7 +491,7 @@ class ScheduleEditSelect(_OwnerSelect, discord.ui.DynamicItem[discord.ui.Select]
         if entry is None or entry.status != "confirmed":
             await interaction.response.send_message("That stream can't be edited any more.", ephemeral=True)
             return
-        await interaction.response.send_modal(EditEntryModal(entry, bot.config.owner_tz))
+        await interaction.response.send_modal(EditEntryModal(entry, bot.owner_tz))
 
 
 class ScheduleDeleteSelect(_OwnerSelect, discord.ui.DynamicItem[discord.ui.Select],

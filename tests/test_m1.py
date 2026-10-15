@@ -115,3 +115,17 @@ class DatabaseTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TimezoneSettingTest(unittest.TestCase):
+    def test_validation_and_suggestions(self):
+        from streamwatch.parsing import suggest_timezones, valid_timezone
+        self.assertTrue(valid_timezone("Asia/Taipei"))
+        self.assertTrue(valid_timezone("Europe/London"))
+        for bad in ("Mars/Olympus", "", "America", "PST", "../etc/passwd"):
+            self.assertFalse(valid_timezone(bad), bad)
+        self.assertEqual(suggest_timezones("")[0], "America/Los_Angeles")
+        self.assertEqual(suggest_timezones("tok")[0], "Asia/Tokyo")
+        self.assertIn("Europe/London", suggest_timezones("lon"))
+        self.assertTrue(all(valid_timezone(z) for z in suggest_timezones("a")))
+        self.assertLessEqual(len(suggest_timezones("a")), 25)

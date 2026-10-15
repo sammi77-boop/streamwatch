@@ -277,3 +277,15 @@ class FeedFallbackTest(unittest.IsolatedAsyncioTestCase):
         await self.bot.latest_video_ids(self.a)
         self.assertEqual(len(self.sent), 2)
         self.assertIn("works again", self.sent[1])
+
+
+class OwnerTimezoneTest(unittest.IsolatedAsyncioTestCase):
+    async def test_setting_overrides_config(self):
+        fd, path = tempfile.mkstemp(suffix=".db")
+        os.close(fd)
+        bot = StreamWatch(Config("x", 1, 42, "k", path, Path("/nonexistent"), None))
+        self.assertEqual(bot.owner_tz, "America/Los_Angeles")   # config default
+        bot.db.set_setting("owner_tz", "Asia/Taipei")            # what /timezone stores
+        self.assertEqual(bot.owner_tz, "Asia/Taipei")
+        bot.db.conn.close()
+        os.remove(path)

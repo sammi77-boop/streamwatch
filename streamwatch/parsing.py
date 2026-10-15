@@ -37,3 +37,33 @@ def parse_duration(text: str) -> Optional[timedelta]:
     for number, unit in parts:
         delta += timedelta(**{units[unit]: int(number)})
     return delta if delta > timedelta(0) else None
+
+
+COMMON_TIMEZONES = [
+    "America/Los_Angeles", "America/Denver", "America/Chicago", "America/New_York", "America/Toronto",
+    "Europe/London", "Europe/Berlin", "Europe/Paris", "Asia/Tokyo", "Asia/Seoul", "Asia/Taipei", "Asia/Shanghai",
+    "Asia/Hong_Kong", "Asia/Singapore", "Asia/Manila", "Asia/Jakarta", "Australia/Sydney", "Pacific/Auckland",
+]
+
+
+def valid_timezone(name: str) -> bool:
+    from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+    try:
+        ZoneInfo(name)
+        return "/" in name or name == "UTC"
+    except (ZoneInfoNotFoundError, ValueError, OSError):
+        return False
+
+
+def suggest_timezones(text: str, limit: int = 25) -> list[str]:
+    """/timezone autocomplete: common zones first, then any zone whose name contains the text (city start first)."""
+    from zoneinfo import available_timezones
+    query = text.strip().lower().replace(" ", "_")
+    if not query:
+        return COMMON_TIMEZONES[:limit]
+    common = [tz for tz in COMMON_TIMEZONES if query in tz.lower()]
+    rest = sorted((tz for tz in available_timezones()
+                   if "/" in tz and query in tz.lower() and tz not in common and not tz.startswith("Etc/")),
+                  key=lambda tz: (not tz.lower().rsplit("/", 1)[-1].startswith(query), tz))
+    return (common + rest)[:limit]
+

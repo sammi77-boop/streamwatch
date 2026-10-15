@@ -23,7 +23,7 @@ from .config import Config, load_config
 from .db import PAUSED_FOREVER, Database, Entry, Streamer
 from .collab import short_channel_name
 from .gcal import CalendarAuthError, CalendarError, GoogleCalendar, event_description, event_title
-from .parsing import CHANNEL_URL_EXAMPLE, parse_channel_url, parse_duration
+from .parsing import CHANNEL_URL_EXAMPLE, parse_channel_url, parse_duration, suggest_timezones, valid_timezone
 from .pipeline import NeedsReview, NewImageEntry, process_image
 from .tracker import (Cancelled, Event, LiveChanged, NewWaitingRoom, Rescheduled, SurpriseLive, Updated, WentLive,
                       apply_update)
@@ -358,7 +358,7 @@ class StreamWatch(discord.Client):
                                      None,  # no OCR check (removed 2026-10-14; see PRD X-2)
                                      reader.FIRST_READER, reader.SECOND_OPINION, post_date or now, now,
                                      post_text, post_id, str(image_path), schedule_id,
-                                     review_tz=self.config.owner_tz)
+                                     review_tz=self.owner_tz)
         # New streams go into ONE table message; changes to streams listed before update their own tables.
         if self.db.schedule_entries(schedule_id):
             await self.post_schedule(schedule_id)
@@ -518,7 +518,7 @@ class StreamWatch(discord.Client):
         """Sunday 20:00 (OWNER_TZ) → the coming Monday–Sunday, once per week; Monday morning catches a missed run."""
         if self.db.is_paused() or "weekly-schedule" not in self.channels:
             return
-        now_local = digest.owner_now(self.config.owner_tz, datetime.now(timezone.utc))
+        now_local = digest.owner_now(self.owner_tz, datetime.now(timezone.utc))
         monday = digest.digest_due(now_local)
         if monday is None or self.db.get_setting("last_digest_week") == monday.isoformat():
             return
@@ -630,6 +630,20 @@ class StreamWatch(discord.Client):
 
     # --- schedule tables in #schedule-images ---
 
+    @property
+    def owner_tz(self) -> str:
+        """My timezone: set with /timezone (stored), else OWNER_TZ from the config."""
+        return self.db.get_setting("owner_tz") or self.config.owner_tz
+
+    async def refresh_recent_schedules(self) -> int:
+        """Redraw schedule tables from the last 30 days (their dropdown labels are written in my timezone)."""
+        since = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
+        rows = self.db.conn.execute("SELECT id FROM schedules WHERE message_id IS NOT NULL AND created_at >= ?",
+                                    (since,)).fetchall()
+        for row in rows:
+            await self.refresh_schedule(row["id"])
+        return len(rows)
+
     def live_state(self, entry: Entry) -> Optional[tuple[str, Optional[datetime]]]:
         """("live", started) / ("ended", started) for a stream that has started, else None."""
         video = self.db.get_video(entry.video_id) if entry.video_id else None
@@ -652,7 +666,7 @@ class StreamWatch(discord.Client):
         has_image = bool(schedule["image_path"]) and Path(schedule["image_path"]).exists()
         live = {e.id: state[0] for e in entries if (state := self.live_state(e))}
         return {"embed": schedule_embed(streamer, entries, names, has_image, schedule["source_url"], live),
-                "view": schedule_view(schedule_id, entries, self.config.owner_tz)}
+                "view": schedule_view(schedule_id, entries, self.owner_tz)}
 
     async def post_schedule(self, schedule_id: int) -> None:
         kwargs = await self.schedule_message_kwargs(schedule_id)
@@ -791,11 +805,35 @@ def register_commands(bot: StreamWatch) -> None:
         return [app_commands.Choice(name=s.name[:100], value=s.channel_id)
                 for s in bot.db.list_streamers() if current in s.name.lower()][:25]
 
+    @tree.command(name="timezone", description="Show or change your timezone (for travel)")
+    @app_commands.describe(tz="Your new timezone; start typing a city, e.g. tokyo or london. Leave empty to see it")
+    async def timezone_cmd(interaction: discord.Interaction, tz: Optional[str] = None) -> None:
+        if not tz:
+            await interaction.response.send_message(
+                f"🕒 Your timezone is `{bot.owner_tz}`. Times in messages follow your device automatically; this "
+                "setting is for dropdown labels, review placement and when the Sunday digest arrives.", ephemeral=True)
+            return
+        if not valid_timezone(tz):
+            await interaction.response.send_message(f"`{tz}` isn't a timezone I know. Pick one from the list, "
+                                                    "e.g. `Asia/Taipei` or `Europe/London`.", ephemeral=True)
+            return
+        old = bot.owner_tz
+        bot.db.set_setting("owner_tz", tz)
+        await interaction.response.defer(thinking=True)
+        refreshed = await bot.refresh_recent_schedules()
+        await interaction.followup.send(
+            f"🕒 Your timezone is now `{tz}` (was `{old}`). Dropdown labels in {refreshed} schedule table(s) are "
+            "updated, and the Sunday digest will arrive at 8 PM your new time.")
+
+    @timezone_cmd.autocomplete("tz")
+    async def timezone_autocomplete(interaction: discord.Interaction, current: str):
+        return [app_commands.Choice(name=z, value=z) for z in suggest_timezones(current)]
+
     @tree.command(name="digest", description="Show the streams of the next 7 days")
     async def digest_cmd(interaction: discord.Interaction) -> None:
         now = datetime.now(timezone.utc)
         await interaction.response.send_message(**await bot.digest_message(
-            digest.owner_now(bot.config.owner_tz, now), digest.owner_now(bot.config.owner_tz, now + timedelta(days=7)),
+            digest.owner_now(bot.owner_tz, now), digest.owner_now(bot.owner_tz, now + timedelta(days=7)),
             "Next 7 days"))
 
     @tree.command(name="list", description="Show followed streamers and whether the bot is paused")
