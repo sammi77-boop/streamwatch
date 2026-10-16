@@ -29,7 +29,7 @@ CHANNELS = {
     "waiting-rooms": "Streams found from YouTube waiting rooms. Tap 💜 Add to calendar on the ones you want.",
     "schedule-images": "Streams read from schedule images (/drop). Tap 💜 Add to calendar on the ones you want.",
     "go-live": "💜 Pings when a stream you picked goes live.",
-    "surprise-live": "❣️ Pings when a followed streamer goes live without announcing it.",
+    "surprise-live": "❣️ Pings when a followed streamer goes live without announcing it, or with under an hour's notice.",
     "needs-review": "Schedule entries the bot couldn't read confidently. Confirm, fix or discard them.",
     "bot-health": "Problems the bot runs into, and when they're fixed.",
 }
@@ -185,12 +185,13 @@ class UnpickButton(_OwnerButton, discord.ui.DynamicItem[discord.ui.Button], temp
         await self.set_picked(interaction, False)
 
 
-def live_alert(streamer: Streamer, video: VideoInfo, owner_id: int, surprise: bool) -> dict:
+def live_alert(streamer: Streamer, video: VideoInfo, owner_id: int, surprise: bool, short_notice: bool = False) -> dict:
     """Message kwargs for #go-live (💜 picked) or #surprise-live (❣️ unannounced)."""
     if surprise:
         content = f"❣️ <@{owner_id}> Surprise stream! **{streamer.name}** just went live"
         embed = discord.Embed(title=video.title[:256], url=watch_url(video.video_id), color=PINK,
-                              description="Not on any schedule.")
+                              description="Announced less than an hour before it started." if short_notice
+                              else "Not on any schedule.")
     else:
         content = f"💜 <@{owner_id}> **{streamer.name}** is live now"
         embed = discord.Embed(title=video.title[:256], url=watch_url(video.video_id), color=PURPLE)

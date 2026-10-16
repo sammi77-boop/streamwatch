@@ -66,6 +66,39 @@ class TrackerTest(unittest.TestCase):
         events = self.update("v1", video(), alerts=False)
         self.assertIsInstance(events[0], NewWaitingRoom)
 
+    def test_short_notice_waiting_room_is_a_surprise_once(self):
+        # L-2c: Gale Galleon opened a waiting room ~20 min before going live; that should ping like a surprise.
+        soon = NOW + timedelta(minutes=20)
+        self.assertIsInstance(self.update("v1", video(start=soon))[0], NewWaitingRoom)
+        events = self.update("v1", video(broadcast="live", start=soon, actual=soon))
+        self.assertEqual([type(e) for e in events], [LiveChanged, SurpriseLive])
+        self.assertTrue(events[1].short_notice)
+        self.assertEqual(self.update("v1", video(broadcast="live", start=soon, actual=soon)), [])
+
+    def test_waiting_room_an_hour_or_more_ahead_is_not_a_surprise(self):
+        start = NOW + timedelta(minutes=61)
+        self.update("v1", video(start=start))
+        self.assertEqual([type(e) for e in self.update("v1", video(broadcast="live", start=start, actual=start))],
+                         [LiveChanged])
+
+    def test_short_notice_stream_i_picked_alerts_as_picked(self):
+        entry = self.update("v1", video(start=NOW + timedelta(minutes=20)))[0].entry
+        self.db.set_picked(entry.id, True)
+        events = self.update("v1", video(broadcast="live", actual=NOW))
+        self.assertEqual([type(e) for e in events], [LiveChanged, WentLive])
+
+    def test_short_notice_rule_skips_a_streamers_first_scan(self):
+        self.update("v1", video(start=NOW + timedelta(minutes=20)), alerts=False)
+        self.assertEqual([type(e) for e in self.update("v1", video(broadcast="live", actual=NOW))], [LiveChanged])
+
+    def test_short_notice_waiting_room_for_a_scheduled_stream_is_not_a_surprise(self):
+        # Announced days ago on a schedule image; the late waiting room only fills in the link.
+        soon = NOW + timedelta(minutes=20)
+        self.db.create_entry(self.streamer.id, soon, "Silent Hill pt 3", "image")
+        self.update("v1", video(start=soon))
+        self.assertEqual([type(e) for e in self.update("v1", video(broadcast="live", start=soon, actual=soon))],
+                         [LiveChanged])
+
     def test_reschedule(self):
         self.update("v1", video())
         events = self.update("v1", video(start=NOW + timedelta(hours=10)))
@@ -185,3 +218,18 @@ class LiveCardTest(unittest.TestCase):
         self.assertEqual([b.label for b in card_view(entry, ("ended", NOW)).children], ["▶ Watch the replay"])
         upcoming = card_embed(entry, malim, [], None)          # before it starts: the normal card
         self.assertFalse(upcoming.title.startswith("🔴"))
+
+
+class CommandsTest(unittest.TestCase):
+    def test_all_slash_commands_are_registered(self):
+        # /drop was once deleted by accident along with another command; this keeps the list honest.
+        import discord
+        from discord import app_commands
+        from streamwatch.bot import register_commands
+
+        class Stub:
+            tree = app_commands.CommandTree(discord.Client(intents=discord.Intents.none()))
+        register_commands(Stub)
+        self.assertEqual({c.name for c in Stub.tree.get_commands()},
+                         {"follow", "unfollow", "drop", "reading_note", "timezone", "digest", "list", "pause",
+                          "resume"})

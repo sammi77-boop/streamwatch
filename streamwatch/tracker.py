@@ -15,6 +15,7 @@ from .youtube import VideoInfo
 FREE_CHAT_RE = re.compile(r"free\s*-?\s*chat|フリーチャット|フリチャ", re.IGNORECASE)
 FREE_CHAT_HORIZON = timedelta(days=30)
 RESCHEDULE_TOLERANCE = timedelta(minutes=1)
+SHORT_NOTICE = timedelta(hours=1)  # L-2c: a waiting room first seen closer to its start than this is a surprise
 
 
 @dataclass
@@ -54,6 +55,7 @@ class LiveChanged:
 @dataclass
 class SurpriseLive:
     video: VideoInfo
+    short_notice: bool = False  # announced, but by a waiting room less than an hour ahead
 
 
 Event = Union[NewWaitingRoom, Rescheduled, Updated, Cancelled, WentLive, SurpriseLive, LiveChanged]
@@ -110,8 +112,11 @@ def apply_update(db: Database, streamer: Streamer, video_id: str, info: Optional
                 else:
                     events.append(Updated(entry))
             else:
+                # L-2c: not on any schedule and announced less than an hour ahead. Not during a first scan,
+                # when every waiting room is new to the bot however long it has existed.
+                short_notice = alerts_enabled and info.scheduled_start - now < SHORT_NOTICE
                 entry = db.create_entry(streamer.id, info.scheduled_start, info.title, "waiting_room", video_id,
-                                        is_collab, partners)
+                                        is_collab, partners, short_notice=short_notice)
                 events.append(NewWaitingRoom(entry))
         elif entry.status == "cancelled":
             entry = db.update_entry(entry.id, status="confirmed", start_utc=info.scheduled_start, **details)
@@ -133,9 +138,13 @@ def apply_update(db: Database, streamer: Streamer, video_id: str, info: Optional
         if entry is not None:
             if previous is None or previous.broadcast != "live":
                 events.append(LiveChanged(entry))  # card shows LIVE NOW, picked or not
-            if entry.picked and db.record_alert(video_id, "picked"):
-                events.append(WentLive(entry, info))
-            # L-2: scheduled but not picked → no alert.
+            if entry.picked:
+                if db.record_alert(video_id, "picked"):
+                    events.append(WentLive(entry, info))
+            elif entry.short_notice and entry.source == "waiting_room" and alerts_enabled:
+                if db.record_alert(video_id, "surprise"):
+                    events.append(SurpriseLive(info, short_notice=True))  # L-2c
+            # L-2: scheduled ahead but not picked → no alert.
         elif alerts_enabled and (previous is None or previous.broadcast != "live"):
             # No entry means it was never seen as a waiting room, so nobody scheduled it.
             if db.record_alert(video_id, "surprise"):

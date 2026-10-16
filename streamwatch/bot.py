@@ -258,7 +258,8 @@ class StreamWatch(discord.Client):
         elif isinstance(event, WentLive):
             await self.send("go-live", **live_alert(streamer, event.video, self.config.owner_id, surprise=False))
         elif isinstance(event, SurpriseLive):
-            await self.send("surprise-live", **live_alert(streamer, event.video, self.config.owner_id, surprise=True))
+            await self.send("surprise-live", **live_alert(streamer, event.video, self.config.owner_id, surprise=True,
+                                                         short_notice=event.short_notice))
 
     # --- Instant waiting rooms via WebSub push (polling stays on as backup) ---
 
@@ -782,6 +783,49 @@ def register_commands(bot: StreamWatch) -> None:
 
     @unfollow.autocomplete("name")
     async def unfollow_autocomplete(interaction: discord.Interaction, current: str):
+        current = current.lower()
+        return [app_commands.Choice(name=s.name[:100], value=s.channel_id)
+                for s in bot.db.list_streamers() if current in s.name.lower()][:25]
+
+    @tree.command(description="Read a schedule image (one the bot missed, or from somewhere other than YouTube)")
+    @app_commands.describe(image="The schedule image (or its first part)", streamer="Whose schedule it is",
+                           image2="Optional: second part, if the schedule is split across images",
+                           image3="Optional: third part",
+                           post_text="Optional: text that came with the post, helps with dates")
+    async def drop(interaction: discord.Interaction, image: discord.Attachment, streamer: str,
+                   image2: Optional[discord.Attachment] = None, image3: Optional[discord.Attachment] = None,
+                   post_text: Optional[str] = None) -> None:
+        if not bot.can_read_images():
+            await interaction.response.send_message(
+                "Image reading isn't set up on the server (no image reader key).", ephemeral=True)
+            return
+        target = bot.db.find_active_streamer(streamer)
+        if not target:
+            await interaction.response.send_message(f"Not following anyone called `{streamer}`.", ephemeral=True)
+            return
+        attachments = [a for a in (image, image2, image3) if a is not None]
+        for a in attachments:
+            if (a.content_type or "").split(";")[0] not in IMAGE_TYPES:
+                await interaction.response.send_message(f"`{a.filename}` isn't a PNG, JPG, WEBP or GIF image.",
+                                                        ephemeral=True)
+                return
+            if a.size > MAX_IMAGE_BYTES:
+                await interaction.response.send_message(f"`{a.filename}` is over 5 MB; try a smaller screenshot.",
+                                                        ephemeral=True)
+                return
+        await interaction.response.defer(thinking=True)
+        images = [(await a.read(), (a.content_type or "").split(";")[0], a.filename or "schedule.png")
+                  for a in attachments]
+        try:
+            result = await bot.read_image(target, images, post_text or "")
+        except Exception as e:
+            log.exception("Reading image failed")
+            await interaction.followup.send(f"⚠️ Couldn't read that image: {e}")
+            return
+        await interaction.followup.send(f"**{target.name}** · {result.summary()}")
+
+    @drop.autocomplete("streamer")
+    async def drop_streamer_autocomplete(interaction: discord.Interaction, current: str):
         current = current.lower()
         return [app_commands.Choice(name=s.name[:100], value=s.channel_id)
                 for s in bot.db.list_streamers() if current in s.name.lower()][:25]

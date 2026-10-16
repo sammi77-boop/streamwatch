@@ -104,6 +104,7 @@ MIGRATIONS = [
     ("entries", "schedule_id", "INTEGER"),
     ("entries", "subtitle", "TEXT"),
     ("schedules", "source_url", "TEXT"),
+    ("entries", "short_notice", "INTEGER NOT NULL DEFAULT 0"),
 ]
 
 PAUSED_FOREVER = "forever"
@@ -155,6 +156,7 @@ class Entry:
     image_path: Optional[str] = None
     schedule_id: Optional[int] = None
     subtitle: Optional[str] = None
+    short_notice: bool = False  # waiting room first seen less than an hour before its start (L-2c)
 
 
 def _now() -> datetime:
@@ -285,13 +287,15 @@ class Database:
                      video_id: Optional[str] = None, is_collab: bool = False, partners: list = (),
                      status: str = "confirmed", orig_tz: Optional[str] = None, confidence: Optional[float] = None,
                      post_id: Optional[str] = None, image_path: Optional[str] = None,
-                     schedule_id: Optional[int] = None, subtitle: Optional[str] = None) -> Entry:
+                     schedule_id: Optional[int] = None, subtitle: Optional[str] = None,
+                     short_notice: bool = False) -> Entry:
         cur = self.conn.execute(
             "INSERT INTO entries (streamer_id, start_utc, title, source, video_id, is_collab, partners_json, status, "
-            "orig_tz, confidence, post_id, image_path, schedule_id, subtitle, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "orig_tz, confidence, post_id, image_path, schedule_id, subtitle, short_notice, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (streamer_id, start_utc.isoformat(), title, source, video_id, int(is_collab), json.dumps(list(partners)),
-             status, orig_tz, confidence, post_id, image_path, schedule_id, subtitle, _now().isoformat()),
+             status, orig_tz, confidence, post_id, image_path, schedule_id, subtitle, int(short_notice),
+             _now().isoformat()),
         )
         self.conn.commit()
         return self.get_entry(cur.lastrowid)
@@ -479,4 +483,5 @@ def _to_entry(row: sqlite3.Row) -> Entry:
                  row["status"], _dt(row["previous_start"]), row["card_channel_id"], row["card_message_id"],
                  bool(row["picked"]), bool(row["is_collab"]), json.loads(row["partners_json"] or "[]"),
                  row["calendar_id"], row["gcal_event_id"], row["orig_tz"], row["confidence"],
-                 row["review_message_id"], row["image_path"], row["schedule_id"], row["subtitle"])
+                 row["review_message_id"], row["image_path"], row["schedule_id"], row["subtitle"],
+                 bool(row["short_notice"]))
