@@ -27,6 +27,8 @@ FIRST_READER = "gemini-3.8-flash"
 SECOND_OPINION = "gemini-3.8-flash"
 SCOPE = "https://www.googleapis.com/auth/cloud-platform"
 URL = "https://aiplatform.googleapis.com/v1/projects/{project}/locations/global/publishers/google/models/{model}:generateContent"
+# Same model on the Gemini API free tier (AI Studio key). Used by the eval only; Google may use free-tier inputs.
+FREE_URL = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
 
 _TIME_ROW = {"type": "OBJECT", "nullable": True, "properties": {
     "timezone": {"type": "STRING", "description": "Timezone label as printed, e.g. EDT"},
@@ -63,22 +65,47 @@ class GeminiReader:
 
     async def read_schedule(self, model: str, images: list[tuple[bytes, str]], streamer: str, post_date: datetime, post_text: str = "", notes: Optional[str] = None
                             ) -> tuple[bool, list[ReadEntry]]:
-        parts = [{"inlineData": {"mimeType": media_type, "data": base64.standard_b64encode(data).decode()}}
-                 for data, media_type in images]
-        parts.append({"text": _prompt(streamer, post_date, post_text, len(images), notes)})
-        body = {"systemInstruction": {"parts": [{"text": SYSTEM}]},
-                "contents": [{"role": "user", "parts": parts}],
-                "generationConfig": {"responseMimeType": "application/json", "responseSchema": RESPONSE_SCHEMA}}
+        return parse_response(await self.read_raw(model, images, streamer, post_date, post_text, notes), model)
+
+    async def read_raw(self, model: str, images: list[tuple[bytes, str]], streamer: str, post_date: datetime,
+                       post_text: str = "", notes: Optional[str] = None) -> dict:
+        body = request_body(images, streamer, post_date, post_text, notes)
         headers = {"Authorization": f"Bearer {await self.auth.get(self.session)}"}
-        async with self.session.post(URL.format(project=self.project, model=model), json=body, headers=headers,
-                                     timeout=aiohttp.ClientTimeout(total=180)) as resp:
-            data = await resp.json(content_type=None)
-            if resp.status != 200:
-                raise GeminiError(f"{model} HTTP {resp.status}: {data.get('error', {}).get('message', data)}")
-        usage = data.get("usageMetadata", {})
-        log.info("%s read image: %s in / %s out tokens", model, usage.get("promptTokenCount"),
-                 usage.get("candidatesTokenCount"))
-        return parse_response(data, model)
+        return await _post(self.session, URL.format(project=self.project, model=model), body, headers, model)
+
+
+class GeminiFreeReader:
+    """The same model and request on the Gemini API free tier, with an AI Studio key (GEMINI_API_KEY)."""
+
+    def __init__(self, session: aiohttp.ClientSession, api_key: str):
+        self.session = session
+        self.api_key = api_key
+
+    async def read_raw(self, model: str, images: list[tuple[bytes, str]], streamer: str, post_date: datetime,
+                       post_text: str = "", notes: Optional[str] = None) -> dict:
+        body = request_body(images, streamer, post_date, post_text, notes)
+        return await _post(self.session, FREE_URL.format(model=model), body, {"x-goog-api-key": self.api_key}, model)
+
+
+def request_body(images: list[tuple[bytes, str]], streamer: str, post_date: datetime, post_text: str,
+                 notes: Optional[str]) -> dict:
+    parts = [{"inlineData": {"mimeType": media_type, "data": base64.standard_b64encode(data).decode()}}
+             for data, media_type in images]
+    parts.append({"text": _prompt(streamer, post_date, post_text, len(images), notes)})
+    return {"systemInstruction": {"parts": [{"text": SYSTEM}]},
+            "contents": [{"role": "user", "parts": parts}],
+            "generationConfig": {"responseMimeType": "application/json", "responseSchema": RESPONSE_SCHEMA}}
+
+
+async def _post(session: aiohttp.ClientSession, url: str, body: dict, headers: dict, model: str) -> dict:
+    async with session.post(url, json=body, headers=headers, timeout=aiohttp.ClientTimeout(total=180)) as resp:
+        data = await resp.json(content_type=None)
+        if resp.status != 200:
+            raise GeminiError(f"{model} HTTP {resp.status}: {data.get('error', {}).get('message', data)}")
+    usage = data.get("usageMetadata", {})
+    log.info("%s read image: %s in / %s out tokens", model, usage.get("promptTokenCount"),
+             usage.get("candidatesTokenCount"))
+    return data
 
 
 def parse_response(data: dict, model: str = "gemini") -> tuple[bool, list[ReadEntry]]:

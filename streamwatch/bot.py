@@ -24,7 +24,7 @@ from .db import PAUSED_FOREVER, Database, Entry, Streamer
 from .collab import short_channel_name
 from .gcal import CalendarAuthError, CalendarError, GoogleCalendar, event_description, event_title
 from .parsing import CHANNEL_URL_EXAMPLE, parse_channel_url, parse_duration, suggest_timezones, valid_timezone
-from .pipeline import NeedsReview, NewImageEntry, process_image
+from .pipeline import NeedsReview, NewImageEntry, process_image, unique_images
 from .tracker import (Cancelled, Event, LiveChanged, NewWaitingRoom, Rescheduled, SurpriseLive, Updated, WentLive,
                       apply_update)
 from . import community, digest, websub
@@ -106,6 +106,7 @@ class StreamWatch(discord.Client):
         self.watch_live_pages.start()
         self.read_community_posts.start()
         self.weekly_digest.start()
+        self.ask_unconfirmed.start()
         await self.start_websub()
 
     async def close(self) -> None:
@@ -250,9 +251,10 @@ class StreamWatch(discord.Client):
         elif isinstance(event, (Rescheduled, Updated, Cancelled)):
             await self.sync_calendar_change(event.entry)
             await self.refresh_card(self.db.get_entry(event.entry.id), streamer)
-            if event.entry.picked and not isinstance(event, Updated):
+            fixed = isinstance(event, Rescheduled) and event.was_tentative
+            if (event.entry.picked and not isinstance(event, Updated)) or fixed:
                 old = event.old_start if isinstance(event, Rescheduled) else None
-                await self.send(card_channel(event.entry), content=change_notice(event.entry, streamer, old))
+                await self.send(card_channel(event.entry), content=change_notice(event.entry, streamer, old, fixed))
         elif isinstance(event, LiveChanged):
             await self.refresh_card(event.entry, streamer)
         elif isinstance(event, WentLive):
@@ -335,6 +337,7 @@ class StreamWatch(discord.Client):
                          source_url: Optional[str] = None):
         """Run the pipeline on one schedule [(bytes, media_type, filename)] and post the results."""
         from . import ocr  # heavy imports, only when an image arrives
+        images = unique_images(images)
         now = datetime.now(timezone.utc)
         if self.config.image_reader == "claude":
             from . import reader
@@ -389,9 +392,12 @@ class StreamWatch(discord.Client):
 
     async def confirm_review(self, entry_id: int, message: Optional[discord.Message]) -> None:
         entry = self.db.get_entry(entry_id)
-        if entry is None or entry.status != "pending_review":
+        if entry is None or not (entry.status == "pending_review" or entry.tentative):
             return
-        entry = self.db.update_entry(entry_id, status="confirmed")
+        was_tentative = entry.tentative
+        entry = self.db.update_entry(entry_id, status="confirmed", tentative=False)
+        if was_tentative:
+            await self.sync_calendar_change(entry)  # drops "(tentative)" from the event title
         streamer = self.db.get_streamer(entry.streamer_id)
         if entry.schedule_id:
             await self.refresh_schedule(entry.schedule_id)
@@ -404,9 +410,11 @@ class StreamWatch(discord.Client):
 
     async def discard_review(self, entry_id: int, message: Optional[discord.Message]) -> None:
         entry = self.db.get_entry(entry_id)
-        if entry is None or entry.status != "pending_review":
+        if entry is None or not (entry.status == "pending_review" or entry.tentative):
             return
-        entry = self.db.update_entry(entry_id, status="discarded")
+        if entry.picked:
+            await self.unpick(entry)
+        entry = self.db.update_entry(entry_id, status="discarded", tentative=False)
         if entry.schedule_id:
             await self.refresh_schedule(entry.schedule_id)
         if message:
@@ -419,10 +427,21 @@ class StreamWatch(discord.Client):
         if entry is None or entry.status != "confirmed":
             return
         moved = abs(entry.start_utc - start) > timedelta(minutes=1)
-        entry = self.db.update_entry(entry_id, start_utc=start, title=title, orig_tz=orig_tz,
+        was_asked = entry.tentative and entry.review_message_id
+        entry = self.db.update_entry(entry_id, start_utc=start, title=title, orig_tz=orig_tz, tentative=False,
                                      **({"previous_start": entry.start_utc} if moved else {}))
         await self.sync_calendar_change(entry)
-        await self.refresh_card(entry, self.db.get_streamer(entry.streamer_id))
+        streamer = self.db.get_streamer(entry.streamer_id)
+        await self.refresh_card(entry, streamer)
+        if was_asked:
+            # My edit answers the "is this right?" card too.
+            channel = self.channels.get("needs-review")
+            if channel:
+                try:
+                    await channel.get_partial_message(entry.review_message_id).edit(
+                        embed=review_embed(entry, streamer, [], state="confirmed"), view=None)
+                except discord.NotFound:
+                    pass
 
     async def delete_entry(self, entry_id: int) -> Optional[str]:
         """Delete a card's stream: remove its calendar event and stop tracking it. Returns a problem, or None."""
@@ -594,7 +613,7 @@ class StreamWatch(discord.Client):
         calendar_id = self.calendar.calendar_id
         try:
             event_id = await self.calendar.create_event(
-                calendar_id, event_title(streamer.name, entry.title, entry.is_collab), entry.start_utc,
+                calendar_id, event_title(streamer.name, entry.title, entry.is_collab, entry.tentative), entry.start_utc,
                 event_description(entry.video_id, await self.partner_names(entry)))
         except CalendarError as e:
             return "⚠️ Picked for go-live alerts, but couldn't add it to your calendar. " + await self._calendar_failed(e)
@@ -624,7 +643,7 @@ class StreamWatch(discord.Client):
             else:
                 await self.calendar.move_event(
                     entry.calendar_id, entry.gcal_event_id, entry.start_utc,
-                    event_title(streamer.name, entry.title, entry.is_collab),
+                    event_title(streamer.name, entry.title, entry.is_collab, entry.tentative),
                     event_description(entry.video_id, await self.partner_names(entry)))
         except CalendarError as e:
             await self._calendar_failed(e)
@@ -719,6 +738,26 @@ class StreamWatch(discord.Client):
             await channel.get_partial_message(entry.card_message_id).edit(**await self.card_parts(entry))
         except discord.NotFound:
             log.info("Card for entry %s was deleted; not refreshing", entry.id)
+
+    @tasks.loop(minutes=30)
+    async def ask_unconfirmed(self) -> None:
+        """Decision 23: a tentative stream on my calendar, still unconfirmed 3 h before it starts, is asked once."""
+        if self.db.is_paused() or len(self.channels) < len(CHANNELS):
+            return
+        now = datetime.now(timezone.utc)
+        for entry in self.db.unconfirmed_picks(now, now + timedelta(hours=3)):
+            streamer = self.db.get_streamer(entry.streamer_id)
+            kwargs = {"embed": review_embed(entry, streamer, []), "view": review_view(entry.id)}
+            if entry.image_path and Path(entry.image_path).exists():
+                kwargs["file"] = discord.File(entry.image_path, filename=SCHEDULE_FILENAME)
+                kwargs["embed"].set_image(url=f"attachment://{SCHEDULE_FILENAME}")
+            message = await self.send("needs-review", **kwargs)
+            if message:
+                self.db.update_entry(entry.id, review_message_id=message.id)
+
+    @ask_unconfirmed.before_loop
+    async def _before_ask(self) -> None:
+        await self.wait_until_ready()
 
     @tasks.loop(minutes=1)
     async def watch_pause(self) -> None:

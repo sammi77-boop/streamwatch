@@ -49,6 +49,8 @@ def _line(item: DigestLine) -> str:
         text += " 🤝 " + (f"*with {', '.join(item.partner_names)}*" if item.partner_names else "*collab*")
     if e.picked:
         text += " 💜"
+    if e.tentative:
+        text += " ⏳"
     if item.jump_url:
         text += f" [↗]({item.jump_url})"
     return text

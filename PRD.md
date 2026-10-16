@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Owner** | sammi77-boop |
-| **Status** | v1.6: M0–M6 complete |
+| **Status** | v1.7: M0–M6 complete; evaluation and tentative streams added |
 | **Last updated** | 2026-10-15 |
 | **Budget** | $0 out of pocket: Google Cloud free trial credit ($300, until 2027-01-12) and free tiers |
 
@@ -44,7 +44,7 @@ A single-user agent that **finds streams from YouTube waiting rooms and communit
 6. **Go-live (picked):** When a stream I picked goes live, I receive a ping in `#go-live` within 5 min.
 7. **Surprise stream:** When a followed streamer goes live without any schedule, or with a waiting room opened less than an hour ahead, I receive a distinctly styled ping in `#surprise-live`.
 8. **Changes:** If a picked stream is rescheduled or cancelled, the calendar event moves or is removed and I'm told.
-9. **Review:** If the agent isn't confident about an image reading, it shows its best guess in `#needs-review` for Confirm / Edit / Discard.
+9. **Tentative streams:** If the agent isn't confident about an image reading, it lists its best guess marked ⏳ tentative instead of asking me. A waiting room, a newer schedule or my edit confirms it, and I'm told if the time was wrong. I'm only asked in `#needs-review` about a tentative stream I put on my calendar that is still unconfirmed shortly before it starts.
 10. **Fix mistakes:** I can edit or delete any stream that came from an image (time, timezone, title).
 11. **Pause:** `/pause [duration]` stops all checks and alerts; `/resume` starts them again.
 12. **Weekly digest:** Every Sunday evening, a digest of the coming week in `#weekly-schedule`; `/digest` shows the next 7 days on demand.
@@ -75,10 +75,11 @@ A single-user agent that **finds streams from YouTube waiting rooms and communit
 |---|---|
 | X-1 | **Reader:** Gemini 3.8 Flash on Gemini Enterprise Agent Platform (formerly Vertex AI; paid from the Google Cloud credit) returns structured JSON per stream: column date, date, start time, timezone as written, title, subtitle, collab flag and partners, confidence, and one check row. Claude remains a fallback (`IMAGE_READER=claude`). |
 | X-2 | **Timezone row:** when the image prints JST, use the JST row with its own date (apply markers like "(FRI)"); otherwise the row matching the column. Read only one other row, to confirm the date. Two titles with "time \| time" are two streams; one title means use the first time; per-streamer reading notes override. |
-| X-3 | **Checks (no OCR):** the main row and the check row must be the same moment; the date must match its column unless the check row confirms it; confidence ≥ 80%; timezone recognised; not more than 3 weeks away. A failed check gets one more read; per stream, the reading that passes is kept. Anything still failing goes to `#needs-review`, showing the bot's best reading. |
-| X-4 | **Timezone:** only what's printed on the image, converted to my timezone; stored in UTC. If none is printed, the stream goes to review (placed provisionally in my timezone) and Edit's timezone dropdown sets it. |
+| X-3 | **Checks (no OCR):** the main row and the check row must be the same moment; the date must match its column unless the check row confirms it; confidence ≥ 80%; timezone recognised; not more than 3 weeks away. A failed check gets one more read; per stream, the reading that passes is kept. Anything still failing is listed as **tentative** (X-7). |
+| X-4 | **Timezone:** only what's printed on the image, converted to my timezone; stored in UTC. If none is printed, the stream is tentative, placed provisionally in my timezone, until a waiting room or Edit's timezone dropdown sets it. |
 | X-5 | **Collabs:** for images, the reader's partner list; for waiting rooms, @handles following "Collab w/", "w/", "ft." or "コラボ" in the description, or names following "w/" in the title ("with" alone and "w/o" are not treated as collab markers). @handles are displayed as channel names. |
 | X-6 | Past streams (more than 3 h ago) are skipped; a stream already listed is not duplicated; a newer schedule moves an image-only stream only when its reading passes the checks. |
+| X-7 | **Tentative streams (decision 23):** shown in the table with ⏳ and the best reading; pickable, never added to my calendar unless I pick it (event titled "(tentative)"). Confirmed by a matching waiting room, a newer reading that passes the checks, the stream going live, or my Edit or Confirm. If the confirmed time differs, a 🔧 Fixed notice is posted even if it isn't picked. A tentative stream on my calendar still unconfirmed 3 h before it starts is asked about once in `#needs-review`. Images repeated within one post are read once. |
 
 ### 5.4 Discord delivery
 Private server, single member (me). Channels:
@@ -86,8 +87,8 @@ Private server, single member (me). Channels:
 | Channel | What it's for |
 |---|---|
 | `#waiting-rooms` | One card per stream found from a YouTube waiting room: start time in my timezone, title, 🤝 collab partners, thumbnail, and **💜 Add to calendar** / **▶ Open** buttons. Once added, the card is marked **💜 ON YOUR CALENDAR** and offers **Remove from calendar**. When the stream starts, the card turns red with **🔴 LIVE NOW** and a **▶ Watch** button; afterwards it shows **Ended** with a replay link. |
-| `#schedule-images` | One table message per schedule (submitted or from a community post): each stream's start time in my timezone, title and subtitle, 🤝 collab partners, 💜 if on my calendar, ⏳ if awaiting review; the schedule image; and three dropdowns: **💜 Add to calendar** (select to add, deselect to remove), **✏️ Edit a stream** (date, hour, minute, timezone, title) and **🗑 Delete a stream**. |
-| `#needs-review` | 🔍 Uncertain readings: the bot's best interpretation, the image, and **✓ Confirm / ✏️ Edit / Discard**. Confirmed streams are added to their table. |
+| `#schedule-images` | One table message per schedule (submitted or from a community post): each stream's start time in my timezone, title and subtitle, 🤝 collab partners, 💜 if on my calendar, ⏳ if tentative; the schedule image; and three dropdowns: **💜 Add to calendar** (select to add, deselect to remove), **✏️ Edit a stream** (date, hour, minute, timezone, title) and **🗑 Delete a stream**. |
+| `#needs-review` | 🔍 Tentative streams on my calendar that are still unconfirmed 3 h before they start: the bot's best reading, the image, and **✓ Confirm / ✏️ Edit / Discard**. |
 | `#go-live` | 💜 Ping when a stream I picked goes live |
 | `#surprise-live` | ❣️ Ping when a followed streamer goes live without a schedule, or with less than an hour's notice |
 | `#weekly-schedule` | 📅 Weekly digest every Sunday 20:00 (`OWNER_TZ`) covering the coming Monday–Sunday: one section per day with time, streamer, title and subtitle, 🤝 partners, 💜 if on my calendar, and a link to each stream's card or table. A missed Sunday run is sent Monday morning; each week is sent once. |
@@ -163,10 +164,10 @@ All times use Discord timestamps, which render in each viewer's own timezone. Dr
 ## 7. Risks & mitigations
 | Risk | Impact | Mitigation |
 |---|---|---|
-| The reader misreads a schedule (e.g. a day off) | Wrong time on a card or calendar | JST row vs. check row must agree; doubtful streams go to review; Edit/Delete on every image stream; waiting rooms correct times automatically |
+| The reader misreads a schedule (e.g. a day off) | Wrong time on a card or calendar | JST row vs. check row must agree; doubtful streams are marked tentative and corrected by their waiting room (with a notice); Edit/Delete on every image stream; evaluation found 0 silent errors in 122 streams (§11.4) |
 | Calendar access stops (key deleted, calendar unshared) | No new events | Go-live alerts still work; reported once in `#bot-health` |
 | YouTube blocks the VM's IP | No waiting-room updates | M0 showed no blocking; errors reported in `#bot-health` |
-| Schedule prints no timezone | Times unknown | Goes to review; timezone picked in Edit |
+| Schedule prints no timezone | Times unknown | Tentative in my timezone; the waiting room or Edit's timezone dropdown fixes it |
 | Members-only streams show up in RSS | Noise | Ignored (non-goal) |
 | Gemini usage after the trial (≈$0.10–$1/month) | Small real cost from 2027 | Covered by the trial credit now; in January, keep it or switch automatic image reading off (§10) |
 
@@ -181,6 +182,7 @@ All times use Discord timestamps, which render in each viewer's own timezone. Dr
 | M5 – Community posts and weekly digest | Community post reading (I-6); weekly digest and `/digest`; live status on cards (L-5) | Complete |
 | M6 – Polish | `/timezone` to change my timezone when travelling | Complete |
 | | Cost review: per-SKU costs confirmed; the VM and its IP stay free after the trial (§10) | Complete |
+| M7 – Evaluation and tentative streams | Image-reader evaluation (§11); uncertain readings become tentative instead of review (X-7); repeated post images read once | Complete |
 
 ## 9. Decisions log
 | # | Question | Decision |
@@ -206,6 +208,8 @@ All times use Discord timestamps, which render in each viewer's own timezone. Dr
 | 19 | Is the public IP charged? | No: Billing by SKU shows "External IP Charge on a Standard VM" at $0.00 for the free-tier e2-micro, so the IPv4 stays and no IPv6 change is needed. (2026-10-14) |
 | 20 | Is the 2-minute live-page watch too frequent? | Kept at 2 min (L-2b). It only runs for picked image-only streams, from 10 min before to 90 min after their start, so it is usually idle; it is free and uses no API quota. The general go-live check stays at 5 min (L-1). (2026-10-14) |
 | 21 | Should short-notice streams count as surprises? | Yes: a waiting room that appears less than an hour before it starts pings in `#surprise-live` when it goes live, unless I picked it or it was on a schedule image (L-2c). Prompted by a stream whose waiting room opened about 20 minutes ahead and went live without a ping. (2026-10-15) |
+| 22 | How is the image reader evaluated, and what does it cost? | An on-demand exam against an answer key built from real schedule posts and checked against YouTube (§11). It runs the same model on the Gemini API free tier, so it costs $0; readings are saved, so re-scoring is free. (2026-10-16) |
+| 23 | What happens to uncertain readings instead of asking me? | They become **tentative**: shown in the table with ⏳ and the best reading, never added to my calendar unless I pick them (then titled "(tentative)"). A matching waiting room confirms or corrects them automatically, with a notice only if the time changed; my Edit also confirms them. I'm asked in `#needs-review` only if a tentative stream on my calendar is still unconfirmed a few hours before it starts. (2026-10-16) |
 
 ## 10. Notes
 
@@ -217,7 +221,8 @@ Confirmed 2026-10-14 in Billing → Reports, by SKU.
 | e2-micro VM, 30 GB standard disk, Ubuntu Minimal licence | $0 | Always Free; billed with "free tier discount" |
 | External IP on the VM | $0 | $0.00 for 8.62 hours of use (list price would be $0.04) |
 | Network Intelligence Center resource hours | $0 | Shown in billing, fully discounted |
-| Gemini 3.8 Flash (Agent Platform) | ≈ $0.10–$1 / month | About $0.01–$0.02 per schedule read; the only real cost |
+| Gemini 3.8 Flash (Agent Platform) | ≈ $0.10–$1 / month (≈ $0.20–$2 from 2027) | About $0.01–$0.02 per schedule read; the only real cost. Google's listed Gemini 3.8 Flash price doubles on 2027-01-01 |
+| Gemini API free tier (AI Studio key) | $0 | Same model; used only by the evaluation (§11). Inputs may be used by Google to improve its products; limits are unpublished and can change |
 | Anthropic API (fallback reader) | $0 | Unused; prepaid credit only, auto-reload off |
 
 - **Budget alert:** $1/month, alert only (promotional credits excluded), so any real charge sends an email.
@@ -228,7 +233,7 @@ Confirmed 2026-10-14 in Billing → Reports, by SKU.
 | When | Action |
 |---|---|
 | Before 2027-01-12 (trial ends) | Upgrade the billing account to keep the VM running. Without the upgrade the VM is stopped and nothing is charged. |
-| January 2027 | Decide whether to keep automatic image reading from community posts (Gemini cost above), or switch it off and use `/drop` only. |
+| January 2027 | Decide how schedule images are read after the trial: keep the paid route, move the bot to the Gemini API free tier (same model, $0, with the paid route as fallback), or switch automatic reading off and use `/drop` only. |
 
 ### 10.3 Parked features
 **Instant waiting-room alerts (WebSub push).** Built, tested and verified on 2026-10-14, then disabled by decision 15;
@@ -257,6 +262,7 @@ Options considered and turned down, grouped by area. Each links to its decision 
 | Gemini 3.5 Flash-Lite | Cheaper, but put a stream a day early on a real schedule (decision 11) |
 | OCR cross-check (Tesseract) | Mostly flagged correctly read stylised text; the reader's own timezone rows are the check now (decision 13) |
 | Streamer home timezones | Not needed: waiting rooms give exact times and schedules print their timezone (decision 12) |
+| Evaluating with a different free model | It would grade that model, not the one the bot uses; the eval uses the same Gemini 3.8 Flash on its free tier instead (decision 22) |
 | One card per stream from an image | Too many messages; one table per schedule instead (decision 14) |
 
 **Finding streams and alerts**
@@ -276,3 +282,45 @@ Options considered and turned down, grouped by area. Each links to its decision 
 | Choosing between several calendars | One dedicated "Stream Watch" calendar is enough (decision 4) |
 | Tracking real stream end times | Fixed 2-hour events are enough (decision 3) |
 | Reading my timezone from Google Calendar | Not possible with a service account; `/timezone` instead (T-3) |
+
+## 11. Evaluation (extra procedure)
+
+An on-demand check of the schedule-image reader, separate from the running bot. Its purpose is to measure whether readings can be trusted without human review, and which review triggers (X-3) can safely be relaxed.
+
+### 11.1 Procedure
+1. **Collect** (`eval/collect.py`): saves the schedule posts on each followed streamer's Posts tab (same filter as I-6) with their images and text, plus YouTube's recent live streams for that channel. The data stays on the VM (`eval/data/`, not in git).
+2. **Answer key** (`eval/answers.json`): every stream as printed on each image, in UTC, written by reading the images. It is checked against YouTube's actual start times: a match within 30 minutes confirms a stream; mismatches are explained by real changes (cancellations, collabs on another channel, members-only or future streams).
+3. **Exam** (`eval/run.py`): reads each schedule exactly as the bot does (same model, prompt, reading notes, checks and second read) on the Gemini API free tier. Readings are saved, so re-scoring after a rule change costs nothing; `--fresh` reads again after a prompt or model change.
+4. **Report** (`eval/report.md`): the metrics below, with the details of every silent error and unnecessary review.
+
+### 11.2 Metrics
+| Metric | Meaning | Target |
+|---|---|---|
+| Silent errors | Readings that pass every check but have the wrong time, or streams that don't exist | 0 |
+| Right time overall | Streams read with the right start time (within 5 min), accepted or reviewed | ≥ 95% (success metric) |
+| Unnecessary reviews | Correct readings that were still sent to `#needs-review` | As low as possible |
+| Caught errors | Wrong readings that the checks sent to review | All wrong readings |
+| Missed | Streams in the key that weren't read at all | 0 |
+
+### 11.3 When to run
+- After changing the prompt, the model, or a check.
+- Before removing or relaxing a review trigger.
+- Before the January 2027 decision on how images are read (§10.2).
+
+### 11.4 Results
+**First run, 2026-10-16** (Gemini 3.8 Flash, paid route because the free tier was too busy; about $0.50 of trial credit). 22 schedules from 6 streamers, 122 streams.
+
+| Metric | Result |
+|---|---|
+| Right time overall | 122 of 122 (100%) |
+| Silent errors | 0 |
+| Unnecessary reviews | 0 |
+| Caught errors | 0 (one schedule failed a check on its first read; the automatic second read fixed it) |
+| Missed | 0 |
+| Titles read correctly | 121 of 122 |
+
+The sample included start/end time pairs (with a reading note), "times are one day after" notes, misprinted day and timezone labels, Japanese and Korean titles, and two streams on one day. Limits: no schedule without a printed timezone was in the sample, and the answer key was written by reading the images (81 of its streams were confirmed exactly by YouTube; the rest were real schedule changes or streams on other channels).
+
+**Conclusion:** for these formats, readings that pass the checks can be trusted without review. Remaining uncertainty is mostly images without a timezone, which tentative streams (decision 23, X-7) handle.
+
+**Also found:** the Posts tab lists each image of a two-image post twice, so those schedules are sent to the reader twice. Identical images are now read and shown once (X-7), which halves the cost of those reads.

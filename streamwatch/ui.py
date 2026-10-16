@@ -205,8 +205,11 @@ def live_alert(streamer: Streamer, video: VideoInfo, owner_id: int, surprise: bo
             "allowed_mentions": discord.AllowedMentions(users=[discord.Object(owner_id)])}
 
 
-def change_notice(entry: Entry, streamer: Streamer, old_start: Optional[datetime]) -> str:
-    """C-3 notice for a picked stream that moved or was cancelled."""
+def change_notice(entry: Entry, streamer: Streamer, old_start: Optional[datetime], fixed: bool = False) -> str:
+    """C-3 notice for a picked stream that moved or was cancelled, or a tentative reading that was corrected."""
+    if fixed:
+        return (f"🔧 Fixed: **{streamer.name}**'s {entry.title} is at "
+                f"**{discord.utils.format_dt(entry.start_utc, 'f')}**, not {discord.utils.format_dt(old_start, 'f')}")
     if entry.status == "cancelled":
         return f"✖ **{streamer.name}** cancelled a stream you picked: {entry.title}"
     return (f"⚠ **{streamer.name}** rescheduled a stream you picked: {entry.title}\n"
@@ -285,7 +288,7 @@ class EditReviewButton(_OwnerButton, discord.ui.DynamicItem[discord.ui.Button], 
     async def callback(self, interaction: discord.Interaction) -> None:
         bot: StreamWatch = interaction.client  # type: ignore[assignment]
         entry = bot.db.get_entry(self.entry_id)
-        if entry is None or entry.status != "pending_review":
+        if entry is None or not (entry.status == "pending_review" or entry.tentative):
             await interaction.response.send_message("This one was already handled.", ephemeral=True)
             return
         await interaction.response.send_modal(EditEntryModal(entry, bot.owner_tz))
@@ -404,6 +407,8 @@ def _schedule_line(entry: Entry, partner_names: list[str], live: Optional[str] =
         line += " 💜"
     if entry.status == "pending_review":
         line += " ⏳ *check in #needs-review*"
+    elif entry.tentative:
+        line += " ⏳ *tentative*"
     if entry.is_collab:
         line += "\n　🤝 " + (f"*with {', '.join(partner_names)}*" if partner_names else "*collab*")
     return line
@@ -421,6 +426,8 @@ def schedule_embed(streamer: Streamer, entries: list[Entry], names: dict[int, li
     if has_image:
         embed.set_image(url=f"attachment://{SCHEDULE_FILENAME}")
     footer = "Times are in your timezone · 💜 = on your calendar"
+    if any(e.tentative for e in entries):
+        footer += " · ⏳ = tentative, a waiting room will confirm it"
     if source_url:
         footer = "From their YouTube post (title links to it) · " + footer
     embed.set_footer(text=footer)
@@ -433,7 +440,7 @@ def _options(entries: list[Entry], tz: str, picked_default: bool = False) -> lis
 
     def label(e: Entry) -> str:
         local = e.start_utc.astimezone(zone)
-        return f"{local:%a %d %b} {local:%I:%M %p}".replace(" 0", " ") + f" · {e.title}"
+        return ("⏳ " if e.tentative else "") + f"{local:%a %d %b} {local:%I:%M %p}".replace(" 0", " ") + f" · {e.title}"
     return [discord.SelectOption(label=label(e)[:100], value=str(e.id), default=picked_default and e.picked)
             for e in entries][:25]
 

@@ -107,9 +107,9 @@ class GoogleCalendar:
         return body["timeZone"]
 
 
-def event_title(streamer_name: str, stream_title: str, is_collab: bool = False) -> str:
-    """C-1: '💜 {Streamer}: {title}', with a 🤝 prefix for collabs."""
-    return f"{'🤝 ' if is_collab else ''}💜 {streamer_name}: {stream_title}"
+def event_title(streamer_name: str, stream_title: str, is_collab: bool = False, tentative: bool = False) -> str:
+    """C-1: '💜 {Streamer}: {title}', with a 🤝 prefix for collabs and '(tentative)' until confirmed."""
+    return f"{'🤝 ' if is_collab else ''}💜 {streamer_name}: {stream_title}" + (" (tentative)" if tentative else "")
 
 
 def event_description(video_id: Optional[str], partner_names: list[str] = ()) -> str:

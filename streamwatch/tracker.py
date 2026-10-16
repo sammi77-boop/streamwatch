@@ -27,6 +27,7 @@ class NewWaitingRoom:
 class Rescheduled:
     entry: Entry
     old_start: datetime
+    was_tentative: bool = False  # a tentative reading corrected: I'm told even if it isn't picked
 
 
 @dataclass
@@ -105,10 +106,10 @@ def apply_update(db: Database, streamer: Streamer, video_id: str, info: Optional
                 entry = db.update_entry(image_entry.id, video_id=video_id, source="both",
                                         start_utc=info.scheduled_start, title=info.title,
                                         is_collab=is_collab or image_entry.is_collab,
-                                        partners=partners or image_entry.partners)
+                                        partners=partners or image_entry.partners, tentative=False)
                 if abs(old - info.scheduled_start) > RESCHEDULE_TOLERANCE:
                     entry = db.update_entry(entry.id, previous_start=old)
-                    events.append(Rescheduled(entry, old))
+                    events.append(Rescheduled(entry, old, was_tentative=image_entry.tentative))
                 else:
                     events.append(Updated(entry))
             else:
@@ -134,7 +135,7 @@ def apply_update(db: Database, streamer: Streamer, video_id: str, info: Optional
             started = info.actual_start or now
             entry = best_match(started, info.title, db.entries_for_streamer(streamer.id, unlinked_only=True))
             if entry is not None:
-                entry = db.update_entry(entry.id, video_id=video_id, source="both")
+                entry = db.update_entry(entry.id, video_id=video_id, source="both", tentative=False)
         if entry is not None:
             if previous is None or previous.broadcast != "live":
                 events.append(LiveChanged(entry))  # card shows LIVE NOW, picked or not

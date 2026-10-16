@@ -40,24 +40,32 @@ class ImageResult:
     skipped_past: int = 0
     duplicates: int = 0
     used_second_opinion: bool = False
+    tentative: int = 0
 
     def summary(self) -> str:
         if not self.is_schedule:
             return "That image doesn't look like a stream schedule, so nothing was added."
         new = sum(isinstance(e, NewImageEntry) for e in self.events)
-        review = sum(isinstance(e, NeedsReview) for e in self.events)
         merged = sum(isinstance(e, (Updated, Rescheduled)) for e in self.events)
         parts = [f"**{new}** added to #schedule-images"]
         if merged:
             parts.append(f"**{merged}** matched streams already listed")
         if self.duplicates:
             parts.append(f"{self.duplicates} already listed")
-        if review:
-            parts.append(f"**{review}** need a quick check in #needs-review")
+        if self.tentative:
+            parts.append(f"**{self.tentative}** marked ⏳ tentative (a waiting room will confirm them)")
         if self.skipped_past:
             parts.append(f"{self.skipped_past} already over")
         note = " (double-checked with a second reader)" if self.used_second_opinion else ""
         return "📅 Read the schedule" + note + ": " + ", ".join(parts) + "."
+
+
+def unique_images(images: list[tuple]) -> list[tuple]:
+    """The Posts tab can list one picture twice (seen on every two-image post): read and show it once."""
+    unique: dict[bytes, tuple] = {}
+    for image in images:
+        unique.setdefault(image[0], image)
+    return list(unique.values())
 
 
 async def process_image(db: Database, streamer: Streamer, images: list[tuple[bytes, str]], read: ReadFn,
@@ -139,17 +147,25 @@ async def _place(db: Database, streamer: Streamer, c: CheckedEntry, now: datetim
             result.events.append(Updated(entry))
         elif not issues and existing.source == "image" and existing.status == "confirmed" \
                 and abs(existing.start_utc - start) > RESCHEDULE_TOLERANCE:
-            # A newer schedule moved an image-only stream.
+            # A newer schedule moved an image-only stream (or corrected a tentative one).
             entry = db.update_entry(existing.id, start_utc=start, previous_start=existing.start_utc,
-                                    title=c.read.title, orig_tz=tz_label, image_path=image_path or existing.image_path)
-            result.events.append(Rescheduled(entry, existing.start_utc))
+                                    title=c.read.title, orig_tz=tz_label, image_path=image_path or existing.image_path,
+                                    tentative=False)
+            result.events.append(Rescheduled(entry, existing.start_utc, was_tentative=existing.tentative))
+        elif not issues and existing.tentative:
+            # A newer reading that passes the checks confirms a tentative stream.
+            result.events.append(Updated(db.update_entry(existing.id, tentative=False)))
         else:
             result.duplicates += 1
         return
 
-    status = "confirmed" if not issues else "pending_review"
+    # Decision 23: a reading that fails a check isn't sent to review; it's listed as tentative (⏳) with the best
+    # reading, and a waiting room, a newer schedule, the stream going live or my Edit confirms it.
+    if issues:
+        log.info("Tentative: %s at %s (%s)", c.read.title, start, "; ".join(issues))
+        result.tentative += 1
     entry = db.create_entry(streamer.id, start, c.read.title, "image", is_collab=c.read.is_collab,
-                            partners=c.read.partners, status=status, orig_tz=tz_label,
-                            confidence=c.read.confidence, post_id=post_id, image_path=image_path,
-                            schedule_id=schedule_id, subtitle=c.read.subtitle)
-    result.events.append(NewImageEntry(entry) if not issues else NeedsReview(entry, issues))
+                            partners=c.read.partners, orig_tz=tz_label, confidence=c.read.confidence,
+                            post_id=post_id, image_path=image_path, schedule_id=schedule_id,
+                            subtitle=c.read.subtitle, tentative=bool(issues))
+    result.events.append(NewImageEntry(entry))

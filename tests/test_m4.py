@@ -6,7 +6,7 @@ import unittest
 from datetime import date, datetime, timedelta, timezone
 
 from streamwatch.db import Database
-from streamwatch.pipeline import NeedsReview, NewImageEntry, process_image
+from streamwatch.pipeline import NewImageEntry, process_image
 from streamwatch.schedule import (ReadEntry, best_match, cross_check, date_in_text, resolve_timezone, times_in_text,
                                   title_similarity, to_utc)
 from streamwatch.tracker import Rescheduled, SurpriseLive, Updated, WentLive, apply_update
@@ -202,17 +202,18 @@ class PipelineTest(unittest.IsolatedAsyncioTestCase):
         self.assertIsInstance(result.events[0], NewImageEntry)
         self.assertEqual(result.events[0].entry.start_utc, datetime(2026, 10, 17, 4, 0, tzinfo=timezone.utc))
 
-    async def test_persistent_disagreement_goes_to_review(self):
+    async def test_persistent_disagreement_is_tentative(self):
+        # Decision 23: listed with ⏳ (and pickable), not sent to #needs-review
         result = await self.read_image([entry("2026-10-16", "22:00", "Minecraft")], [entry("2026-10-16", "23:00", "Minecraft")])
-        self.assertIsInstance(result.events[0], NeedsReview)
-        self.assertEqual(result.events[0].entry.status, "pending_review")
-        self.assertIn("not found by OCR", result.events[0].issues[0])
+        self.assertIsInstance(result.events[0], NewImageEntry)
+        self.assertEqual((result.events[0].entry.status, result.events[0].entry.tentative), ("confirmed", True))
+        self.assertEqual(result.tentative, 1)
+        self.assertIn("tentative", result.summary())
 
     async def test_unknown_timezone_goes_to_review_with_provisional_time(self):
         result = await self.read_image([entry("2026-10-16", "21:00", "Minecraft", tz="Moon Time")],
                                 [entry("2026-10-16", "21:00", "Minecraft", tz="Moon Time")])
-        self.assertIsInstance(result.events[0], NeedsReview)
-        self.assertIn("unknown timezone", " ".join(result.events[0].issues))
+        self.assertTrue(result.events[0].entry.tentative)
 
     async def test_same_image_twice_is_not_duplicated(self):
         await self.read_image([entry("2026-10-16", "21:00", "Minecraft hardcore")])
@@ -258,6 +259,27 @@ class PipelineTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(events[0].entry.id, image_entry.id)
         self.assertEqual((events[0].entry.video_id, events[0].entry.source), ("v2", "both"))
 
+    async def test_waiting_room_confirms_and_fixes_a_tentative_stream(self):
+        wrong = ReadEntry("2026-10-16", "21:00", "PT", "Minecraft hardcore", False, [], 0.5)  # low confidence
+        result = await process_image(self.db, self.streamer, [(b"i", "image/png")], self.reader([wrong], [wrong]),
+                                     None, "A", "B", NOW, NOW)
+        tentative = result.events[0].entry
+        self.assertTrue(tentative.tentative)
+        info = VideoInfo("v2", "UC1", "【Minecraft】 HARDCORE day 1", "upcoming",
+                         datetime(2026, 10, 17, 5, 0, tzinfo=timezone.utc), None, False)
+        events = apply_update(self.db, self.streamer, "v2", info, NOW)
+        self.assertIsInstance(events[0], Rescheduled)
+        self.assertTrue(events[0].was_tentative)  # I'm told it was fixed, even though I didn't pick it
+        self.assertFalse(self.db.get_entry(tentative.id).tentative)
+
+    async def test_newer_passing_reading_confirms_a_tentative_stream(self):
+        low = ReadEntry("2026-10-16", "21:00", "PT", "Minecraft hardcore", False, [], 0.5)
+        first = await process_image(self.db, self.streamer, [(b"i", "image/png")], self.reader([low], [low]),
+                                    None, "A", "B", NOW, NOW)
+        result = await self.read_image([entry("2026-10-16", "21:00", "Minecraft hardcore")])
+        self.assertIsInstance(result.events[0], Updated)
+        self.assertFalse(self.db.get_entry(first.events[0].entry.id).tentative)
+
     async def test_picked_image_stream_going_live_alerts_not_surprise(self):
         result = await self.read_image([entry("2026-10-16", "21:00", "Minecraft hardcore")])
         self.db.set_picked(result.events[0].entry.id, True)
@@ -277,9 +299,8 @@ class PipelineTest(unittest.IsolatedAsyncioTestCase):
         no_tz = [ReadEntry("2026-10-16", "21:00", None, "Minecraft", False, [], 0.95)]
         result = await process_image(self.db, self.streamer, [(b"i", "image/png")], self.reader(no_tz, no_tz), None,
                                      "A", "B", NOW, NOW, review_tz="America/Los_Angeles")
-        self.assertIsInstance(result.events[0], NeedsReview)
-        self.assertIn("no timezone printed on the image", result.events[0].issues)
-        # placed provisionally at 9 PM in the owner's timezone until it's fixed in review
+        self.assertTrue(result.events[0].entry.tentative)
+        # placed provisionally at 9 PM in the owner's timezone until a waiting room or an edit fixes it
         self.assertEqual(result.events[0].entry.start_utc, datetime(2026, 10, 17, 4, 0, tzinfo=timezone.utc))
 
     async def test_without_ocr_correct_readings_go_straight_to_the_table(self):
@@ -296,7 +317,12 @@ class PipelineTest(unittest.IsolatedAsyncioTestCase):
                           [("2026-10-15", "18:00", "EDT")])
         result = await process_image(self.db, self.streamer, [(b"i", "image/png")],
                                      self.reader([wrong], [wrong]), None, "A", "B", NOW, NOW)
-        self.assertIsInstance(result.events[0], NeedsReview)
+        self.assertTrue(result.events[0].entry.tentative)
+
+    def test_identical_images_are_read_once(self):
+        from streamwatch.pipeline import unique_images
+        images = [(b"same", "image/png", "post_1.png"), (b"same", "image/png", "post_2.png"), (b"other", "image/png", "x")]
+        self.assertEqual(unique_images(images), [images[0], images[2]])
 
     async def test_schedule_split_across_two_images_is_read_together(self):
         ocr_calls = []

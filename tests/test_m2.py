@@ -220,6 +220,32 @@ class LiveCardTest(unittest.TestCase):
         self.assertFalse(upcoming.title.startswith("🔴"))
 
 
+class TentativeTest(unittest.TestCase):
+    def test_tentative_entries_are_marked_and_asked_about_only_when_picked(self):
+        from streamwatch.db import Entry, Streamer
+        from streamwatch.gcal import event_title
+        from streamwatch.ui import schedule_embed
+        fd, path = tempfile.mkstemp(suffix=".db")
+        os.close(fd)
+        db = Database(path)
+        s, _ = db.add_streamer("UC1", "@a", "Alpha")
+        soon = NOW + timedelta(hours=2)
+        unpicked = db.create_entry(s.id, soon, "Unpicked", "image", tentative=True)
+        picked = db.create_entry(s.id, soon, "Picked", "image", tentative=True)
+        db.set_picked(picked.id, True)
+        sure = db.create_entry(s.id, soon, "Sure", "image")
+        db.set_picked(sure.id, True)
+        self.assertEqual([e.id for e in db.unconfirmed_picks(NOW, NOW + timedelta(hours=3))], [picked.id])
+        db.update_entry(picked.id, review_message_id=1)  # asked once only
+        self.assertEqual(db.unconfirmed_picks(NOW, NOW + timedelta(hours=3)), [])
+        self.assertEqual(event_title("Alpha", "Picked", tentative=True), "💜 Alpha: Picked (tentative)")
+        embed = schedule_embed(s, [db.get_entry(unpicked.id), db.get_entry(sure.id)], {}, False)
+        self.assertIn("⏳ *tentative*", embed.description)
+        self.assertIn("⏳ = tentative", embed.footer.text)
+        db.conn.close()
+        os.remove(path)
+
+
 class CommandsTest(unittest.TestCase):
     def test_all_slash_commands_are_registered(self):
         # /drop was once deleted by accident along with another command; this keeps the list honest.

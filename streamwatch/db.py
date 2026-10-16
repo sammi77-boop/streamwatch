@@ -105,6 +105,7 @@ MIGRATIONS = [
     ("entries", "subtitle", "TEXT"),
     ("schedules", "source_url", "TEXT"),
     ("entries", "short_notice", "INTEGER NOT NULL DEFAULT 0"),
+    ("entries", "tentative", "INTEGER NOT NULL DEFAULT 0"),
 ]
 
 PAUSED_FOREVER = "forever"
@@ -157,6 +158,7 @@ class Entry:
     schedule_id: Optional[int] = None
     subtitle: Optional[str] = None
     short_notice: bool = False  # waiting room first seen less than an hour before its start (L-2c)
+    tentative: bool = False     # image reading that failed a check: shown with ⏳ until confirmed (X-3, decision 23)
 
 
 def _now() -> datetime:
@@ -288,14 +290,14 @@ class Database:
                      status: str = "confirmed", orig_tz: Optional[str] = None, confidence: Optional[float] = None,
                      post_id: Optional[str] = None, image_path: Optional[str] = None,
                      schedule_id: Optional[int] = None, subtitle: Optional[str] = None,
-                     short_notice: bool = False) -> Entry:
+                     short_notice: bool = False, tentative: bool = False) -> Entry:
         cur = self.conn.execute(
             "INSERT INTO entries (streamer_id, start_utc, title, source, video_id, is_collab, partners_json, status, "
-            "orig_tz, confidence, post_id, image_path, schedule_id, subtitle, short_notice, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "orig_tz, confidence, post_id, image_path, schedule_id, subtitle, short_notice, tentative, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (streamer_id, start_utc.isoformat(), title, source, video_id, int(is_collab), json.dumps(list(partners)),
              status, orig_tz, confidence, post_id, image_path, schedule_id, subtitle, int(short_notice),
-             _now().isoformat()),
+             int(tentative), _now().isoformat()),
         )
         self.conn.commit()
         return self.get_entry(cur.lastrowid)
@@ -316,8 +318,11 @@ class Database:
             fields["partners_json"] = json.dumps(list(fields.pop("partners")))
         if "is_collab" in fields:
             fields["is_collab"] = int(fields["is_collab"])
+        if "tentative" in fields:
+            fields["tentative"] = int(fields["tentative"])
         allowed = {"start_utc", "title", "status", "previous_start", "card_channel_id", "card_message_id",
-                   "is_collab", "partners_json", "video_id", "source", "orig_tz", "review_message_id", "image_path"}
+                   "is_collab", "partners_json", "video_id", "source", "orig_tz", "review_message_id", "image_path",
+                   "tentative"}
         assert set(fields) <= allowed, set(fields) - allowed
         values = [v.isoformat() if isinstance(v, datetime) else v for v in fields.values()]
         assignments = ", ".join(f"{k} = ?" for k in fields)
@@ -373,6 +378,14 @@ class Database:
         if unlinked_only:
             sql += " AND video_id IS NULL"
         rows = self.conn.execute(sql, (streamer_id, *statuses)).fetchall()
+        return [self.get_entry(r["id"]) for r in rows]
+
+    def unconfirmed_picks(self, start: datetime, end: datetime) -> list[Entry]:
+        """Tentative streams on my calendar starting in [start, end) that haven't been asked about yet."""
+        rows = self.conn.execute(
+            "SELECT e.id FROM entries e JOIN picks p ON p.entry_id = e.id WHERE e.status = 'confirmed' "
+            "AND e.tentative = 1 AND e.review_message_id IS NULL AND e.start_utc >= ? AND e.start_utc < ?",
+            (start.astimezone(timezone.utc).isoformat(), end.astimezone(timezone.utc).isoformat())).fetchall()
         return [self.get_entry(r["id"]) for r in rows]
 
     def entries_between(self, start: datetime, end: datetime) -> list[Entry]:
@@ -484,4 +497,4 @@ def _to_entry(row: sqlite3.Row) -> Entry:
                  bool(row["picked"]), bool(row["is_collab"]), json.loads(row["partners_json"] or "[]"),
                  row["calendar_id"], row["gcal_event_id"], row["orig_tz"], row["confidence"],
                  row["review_message_id"], row["image_path"], row["schedule_id"], row["subtitle"],
-                 bool(row["short_notice"]))
+                 bool(row["short_notice"]), bool(row["tentative"]))
