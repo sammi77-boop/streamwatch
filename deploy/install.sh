@@ -9,7 +9,9 @@ fi
 .venv/bin/pip install -q --upgrade pip
 .venv/bin/pip install -q -r requirements.txt
 .venv/bin/python -m unittest discover tests
-sudo cp deploy/streamwatch.service /etc/systemd/system/streamwatch.service
+# Fill in this machine's user and project folder.
+sed "s|__DIR__|$PWD|g; s|__USER__|$USER|g" deploy/streamwatch.service \
+  | sudo tee /etc/systemd/system/streamwatch.service >/dev/null
 sudo systemctl daemon-reload
 sudo systemctl enable streamwatch >/dev/null
 if [ -f .env ]; then

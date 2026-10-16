@@ -11,3 +11,4 @@ keys:.ssh/
 google_service_account.json
 client_secret*.json
 schedule_images/
+.Rhistory

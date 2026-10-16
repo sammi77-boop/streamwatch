@@ -3,15 +3,15 @@
 | | |
 |---|---|
 | **Owner** | sammi77-boop |
-| **Status** | v1.5: M0–M6 complete |
-| **Last updated** | 2026-10-14 |
+| **Status** | v1.6: M0–M6 complete |
+| **Last updated** | 2026-10-15 |
 | **Budget** | $0 out of pocket: Google Cloud free trial credit ($300, until 2027-01-12) and free tiers |
 
 ---
 
 ## 1. Problem
 
-I follow multiple YouTube streamers and spend too much time tracking their schedules, yet still miss streams. Weekly schedules are posted as images at unpredictable times. I have to check each channel, read the schedule, convert time zones, and remember when to tune in.
+I follow many YouTube streamers. Whenever I want to watch something, I have to click through their channels one by one to see who is live. Planning ahead is even harder: schedules are posted as images, at random times, in other timezones, so I have to read each one, convert the times and remember when to tune in. I spend more time checking than watching, and still miss streams I care about.
 
 ## 2. Goal
 
@@ -32,7 +32,7 @@ A single-user agent that **finds streams from YouTube waiting rooms and communit
 - Members-only streams
 - Multi-user support, accounts, or a web dashboard
 - VOD, clip, Shorts, or premiere tracking
-- WhatsApp (replaced by Discord)
+- Messaging apps other than Discord
 - Tracking streamers' locations or home timezones: times come from waiting rooms or from the timezone printed on schedules
 
 ## 4. User stories
@@ -42,14 +42,14 @@ A single-user agent that **finds streams from YouTube waiting rooms and communit
 4. **Collabs:** Collabs are marked and list partner names, taken from the image, the waiting room title or its description.
 5. **Pick:** Adding a stream creates a Google Calendar event in my Stream Watch calendar.
 6. **Go-live (picked):** When a stream I picked goes live, I receive a ping in `#go-live` within 5 min.
-7. **Surprise stream:** When a followed streamer goes live without any schedule, I receive a distinctly styled ping in `#surprise-live`.
+7. **Surprise stream:** When a followed streamer goes live without any schedule, or with a waiting room opened less than an hour ahead, I receive a distinctly styled ping in `#surprise-live`.
 8. **Changes:** If a picked stream is rescheduled or cancelled, the calendar event moves or is removed and I'm told.
 9. **Review:** If the agent isn't confident about an image reading, it shows its best guess in `#needs-review` for Confirm / Edit / Discard.
 10. **Fix mistakes:** I can edit or delete any stream that came from an image (time, timezone, title).
 11. **Pause:** `/pause [duration]` stops all checks and alerts; `/resume` starts them again.
 12. **Weekly digest:** Every Sunday evening, a digest of the coming week in `#weekly-schedule`; `/digest` shows the next 7 days on demand.
-14. **Live status:** When any listed stream starts, its card shows it is live (without a ping), and later that it has ended.
 13. **Travel:** `/timezone` changes my timezone when I travel (dropdown labels, review placement, digest time).
+14. **Live status:** When any listed stream starts, its card shows it is live (without a ping), and later that it has ended.
 
 ## 5. Functional requirements
 
@@ -89,7 +89,7 @@ Private server, single member (me). Channels:
 | `#schedule-images` | One table message per schedule (submitted or from a community post): each stream's start time in my timezone, title and subtitle, 🤝 collab partners, 💜 if on my calendar, ⏳ if awaiting review; the schedule image; and three dropdowns: **💜 Add to calendar** (select to add, deselect to remove), **✏️ Edit a stream** (date, hour, minute, timezone, title) and **🗑 Delete a stream**. |
 | `#needs-review` | 🔍 Uncertain readings: the bot's best interpretation, the image, and **✓ Confirm / ✏️ Edit / Discard**. Confirmed streams are added to their table. |
 | `#go-live` | 💜 Ping when a stream I picked goes live |
-| `#surprise-live` | ❣️ Ping when a followed streamer goes live without a schedule |
+| `#surprise-live` | ❣️ Ping when a followed streamer goes live without a schedule, or with less than an hour's notice |
 | `#weekly-schedule` | 📅 Weekly digest every Sunday 20:00 (`OWNER_TZ`) covering the coming Monday–Sunday: one section per day with time, streamer, title and subtitle, 🤝 partners, 💜 if on my calendar, and a link to each stream's card or table. A missed Sunday run is sent Monday morning; each week is sent once. |
 | `#bot-health` | ⚠️ Operational problems (YouTube access, calendar access) and ✅ their recovery |
 
@@ -111,9 +111,10 @@ All times use Discord timestamps, which render in each viewer's own timezone. Dr
 | L-2 | **Picked:** alert with a ping in `#go-live`. **Scheduled but not picked:** no alert. **Never scheduled:** alert with a ping in `#surprise-live`. |
 | L-2a | **Picked image stream with no waiting room:** if the streamer goes live within ±90 min of it, it's treated as that stream (alert in `#go-live`, not `#surprise-live`). |
 | L-2b | **Live-page watch:** from 10 min before a picked image-only stream until 90 min after, check the streamer's `/live` page every 2 min (free, no quota). |
+| L-2c | **Short notice counts as a surprise:** a waiting room first seen less than 1 hour before its start, not on any schedule image and not picked, pings in `#surprise-live` when it goes live ("Announced less than an hour before it started"). A streamer's first scan doesn't count. |
 | L-3 | Each alert fires only once per video. |
-| L-5 | **Live status without a ping:** when any listed stream starts or ends, its card (or table line) is redrawn as live or ended, whether or not it was picked. |
 | L-4 | Quota stays well under 10,000 units/day (≈300 units/day expected, up to ≈1,200 while RSS is down). Never `search.list` (100 units per call). |
+| L-5 | **Live status without a ping:** when any listed stream starts or ends, its card (or table line) is redrawn as live or ended, whether or not it was picked. |
 
 ### 5.7 My timezone
 | ID | Requirement |
@@ -125,16 +126,22 @@ All times use Discord timestamps, which render in each viewer's own timezone. Dr
 ## 6. Architecture
 
 ```
- YouTube RSS + videos.list ──(15 min / 5 min)──┐
- YouTube /live page (picked image streams) ────┤
-                                               ▼
- /drop image ──► Gemini 3.8 Flash (Agent Platform) ──► checks + time conversion (code)
-                                               │
-                                     SQLite (one file)
-                                               │
-                     ┌──────────── Discord bot (discord.py) ────────────┐
-                     │ cards · tables · dropdowns · commands · alerts    │──► Google Calendar API
-                     └────────────────────────────────────────────────────┘
+ YouTube (outside, free)
+   RSS feed, or API uploads list   every 15 min
+   videos.list (status, start)     every 5 min
+   Posts tab (schedule images)     every 3 h
+   /live page (picked image only)  every 2 min
+                     │
+                     ▼
+ ┌─ Google Cloud e2-micro VM (always free) ─┐
+ │ StreamWatch bot (Python, discord.py)     │◄──► Gemini 3.8 Flash
+ │ checks, matching, time conversion        │     (Agent Platform)
+ │ SQLite database (one file)               │
+ └──────────────────────────────────────────┘
+           ▲ │                     │
+           │ ▼                     ▼
+ Discord: commands, /drop     Google Calendar
+ cards, tables, alerts        (Stream Watch calendar)
 ```
 
 - **Runtime:** one always-on Python process (discord.py with its task loops), systemd service `streamwatch`, SQLite as the only store.
@@ -178,7 +185,7 @@ All times use Discord timestamps, which render in each viewer's own timezone. Dr
 ## 9. Decisions log
 | # | Question | Decision |
 |---|---|---|
-| 1 | How does the agent know my timezone? | Discord timestamps show every time in my device's timezone; `OWNER_TZ` only for dropdown labels and review placement; `/timezone` planned (M6). Reading my Google Calendar setting isn't possible with a service account. (Updated 2026-10-14) |
+| 1 | How does the agent know my timezone? | Discord timestamps show every time in my device's timezone; `OWNER_TZ` only for dropdown labels, review placement and the digest time; `/timezone` changes it (M6, T-3). Reading my Google Calendar setting isn't possible with a service account. (Updated 2026-10-14) |
 | 2 | What does the Sunday digest cover? | Sunday 20:00 local, covering the coming Monday–Sunday |
 | 3 | How long are calendar events? | Fixed 2-hour block from the start time, with no end-time tracking (C-1) |
 | 4 | Which calendar? | One specific calendar ("Stream Watch") in one Google account, set once in config (C-4). Added `/pause` and `/resume` (F-2). |
@@ -197,23 +204,75 @@ All times use Discord timestamps, which render in each viewer's own timezone. Dr
 | 17 | How are community posts filtered? | Option A: only posts whose text contains schedule words (or four weekday names) are sent to the image reader; no model call is used just to classify a post. (2026-10-14) |
 | 18 | Unpicked streams that go live? | No ping (L-2), but the card turns red and shows it is live (L-5), so live streams are visible without extra notifications. (2026-10-14) |
 | 19 | Is the public IP charged? | No: Billing by SKU shows "External IP Charge on a Standard VM" at $0.00 for the free-tier e2-micro, so the IPv4 stays and no IPv6 change is needed. (2026-10-14) |
+| 20 | Is the 2-minute live-page watch too frequent? | Kept at 2 min (L-2b). It only runs for picked image-only streams, from 10 min before to 90 min after their start, so it is usually idle; it is free and uses no API quota. The general go-live check stays at 5 min (L-1). (2026-10-14) |
+| 21 | Should short-notice streams count as surprises? | Yes: a waiting room that appears less than an hour before it starts pings in `#surprise-live` when it goes live, unless I picked it or it was on a schedule image (L-2c). Prompted by a stream whose waiting room opened about 20 minutes ahead and went live without a ping. (2026-10-15) |
 
-## 10. Notes (deferred items, not part of the current product)
+## 10. Notes
 
-**Instant waiting-room alerts (WebSub push).** Built, tested and verified on 2026-10-14, then disabled by decision;
-waiting rooms are found by RSS polling every 15 minutes (I-3).
-- How it works: the bot subscribes each followed channel at YouTube's WebSub hub; when a streamer creates or updates
-  a video, the hub pushes it to the bot within about a minute. Pushes are verified with a shared secret;
+### 10.1 Costs
+Confirmed 2026-10-14 in Billing → Reports, by SKU.
+
+| Item | Cost after the free trial | Note |
+|---|---|---|
+| e2-micro VM, 30 GB standard disk, Ubuntu Minimal licence | $0 | Always Free; billed with "free tier discount" |
+| External IP on the VM | $0 | $0.00 for 8.62 hours of use (list price would be $0.04) |
+| Network Intelligence Center resource hours | $0 | Shown in billing, fully discounted |
+| Gemini 3.8 Flash (Agent Platform) | ≈ $0.10–$1 / month | About $0.01–$0.02 per schedule read; the only real cost |
+| Anthropic API (fallback reader) | $0 | Unused; prepaid credit only, auto-reload off |
+
+- **Budget alert:** $1/month, alert only (promotional credits excluded), so any real charge sends an email.
+- **Free-tier limit:** Always Free covers one e2-micro per billing account, across all projects. Other projects can
+  share this VM if they are light (1 GB of memory) or use free serverless tiers; a second VM costs about $7–8/month.
+
+### 10.2 Upcoming actions
+| When | Action |
+|---|---|
+| Before 2027-01-12 (trial ends) | Upgrade the billing account to keep the VM running. Without the upgrade the VM is stopped and nothing is charged. |
+| January 2027 | Decide whether to keep automatic image reading from community posts (Gemini cost above), or switch it off and use `/drop` only. |
+
+### 10.3 Parked features
+**Instant waiting-room alerts (WebSub push).** Built, tested and verified on 2026-10-14, then disabled by decision 15;
+waiting rooms are found by polling every 15 minutes (I-3).
+- **How it works:** the bot subscribes each followed channel at YouTube's WebSub hub; when a streamer creates or
+  updates a video, the hub pushes it to the bot within about a minute. Pushes are verified with a shared secret;
   subscriptions renew every 2 days. Free (no quota until a pushed video is looked up).
-- To turn it back on: add `WEBSUB_ENABLED=1` to the server's `.env`, open TCP port 8080 in the Google Cloud
+- **To turn it back on:** add `WEBSUB_ENABLED=1` to the server's `.env`, open TCP port 8080 in the Google Cloud
   firewall (rule `allow-youtube-websub`, ingress, 0.0.0.0/0), and restart the bot.
 
-**Costs after the free trial (confirmed 2026-10-14, Billing → Reports by SKU).** The free trial ends on
-2027-01-12; keeping the VM requires upgrading the billing account. Confirmed per SKU:
-- e2-micro VM, 30 GB standard disk, Ubuntu Minimal licence: $0 (always-free; billed with "free tier discount").
-- External IP on the VM: $0.00 for 8.62 hours of use (would be $0.04 at list price), so no IPv6 change is needed.
-- Network Intelligence Center resource hours: shown in billing but fully discounted.
-- Gemini 3.8 Flash on Agent Platform: the only real cost after the trial, about $0.01–$0.02 per schedule read
-  (roughly $0.10–$1 per month). Decision for January: keep automatic image reading, or switch it off and use `/drop` only.
-- Rejected options: Cloud NAT is not cheaper (about $4.60/month); IPv6-only is unnecessary since the IPv4 is free.
-Anthropic usage is prepaid credit only (keep auto-reload off).
+### 10.4 Rejected options
+Options considered and turned down, grouped by area. Each links to its decision (§9) or requirement where one exists.
+
+**Hosting and cost**
+| Option | Why not |
+|---|---|
+| Oracle Cloud free VM | Both free machine types were out of capacity in San Jose |
+| Cloud NAT (to drop the public IP) | Not cheaper: about $4.60/month, while the IP is free (decision 19) |
+| IPv6-only VM | Unnecessary, since the IPv4 address is free (decision 19) |
+| Spend cap enforcement | Can't cover Compute Engine, and would pause services when reached; a $1 alert-only budget is used instead (§10.1) |
+
+**Reading schedule images**
+| Option | Why not |
+|---|---|
+| Claude as the main image reader | Paid from prepaid Anthropic credit (real money); Gemini runs on the Google Cloud credit (decision 11) |
+| Gemini 3.5 Flash-Lite | Cheaper, but put a stream a day early on a real schedule (decision 11) |
+| OCR cross-check (Tesseract) | Mostly flagged correctly read stylised text; the reader's own timezone rows are the check now (decision 13) |
+| Streamer home timezones | Not needed: waiting rooms give exact times and schedules print their timezone (decision 12) |
+| One card per stream from an image | Too many messages; one table per schedule instead (decision 14) |
+
+**Finding streams and alerts**
+| Option | Why not |
+|---|---|
+| `/follow` by channel name | Name lookup needs `search.list` at 100 quota units per call; channel URLs cost 1 (F-1) |
+| Sending every community post image to Gemini to ask "is this a schedule?" (option B) | A paid model call per post; schedule words in the post text are enough (option A, decision 17) |
+| ±30 min matching window | Would miss streams whose waiting room time differs more from the schedule; ±90 is kept, with title similarity to separate close streams (I-4) |
+| Checking feeds and go-live every 2 min | 15 min for waiting rooms and 5 min for go-live are enough; 2 min would use about 720 quota units a day on the shared key (L-1, I-3) |
+| Pings for every stream that goes live | Too noisy; unpicked streams turn red on their card without a ping (decision 18) |
+| Proxy rotation, bot-check spoofing or logged-in cookies if YouTube blocks the VM | Against YouTube's rules and risks the account; fallbacks are a home machine or a paid hosted API (decision 6) |
+
+**Discord and calendar**
+| Option | Why not |
+|---|---|
+| Google OAuth app for Calendar | Publishing needs an owned domain; testing tokens expire every 7 days (decision 10) |
+| Choosing between several calendars | One dedicated "Stream Watch" calendar is enough (decision 4) |
+| Tracking real stream end times | Fixed 2-hour events are enough (decision 3) |
+| Reading my timezone from Google Calendar | Not possible with a service account; `/timezone` instead (T-3) |
