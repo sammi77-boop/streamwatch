@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Owner** | sammi77-boop |
-| **Status** | v1.7: M0–M6 complete; evaluation and tentative streams added |
+| **Status** | v1.8: M0–M7 complete |
 | **Last updated** | 2026-10-15 |
 | **Budget** | $0 out of pocket: Google Cloud free trial credit ($300, until 2027-01-12) and free tiers |
 
@@ -68,7 +68,7 @@ A single-user agent that **finds streams from YouTube waiting rooms and communit
 | I-4 | **Matching:** image entries and waiting rooms for the same streamer within ±90 min (plus title similarity, or a lone candidate within ±30 min) are the same stream; the waiting room's exact time and title win. |
 | I-4a | **Ignore free-chat rooms:** waiting rooms scheduled more than 30 days ahead or titled "free chat" / "フリーチャット". |
 | I-5 | Each channel is checked on its own, so one failing doesn't stop the others. A channel that can't be read either way for an hour is reported once in `#bot-health`, and once when it recovers. |
-| I-6 | **Community posts:** every 3 h, read each followed channel's Posts tab page (no API exists for posts). A new post with images, not members-only, whose text has a schedule word (schedule, this week, スケジュール, 予定…) or four weekday names is read like `/drop` (all its images as one schedule); its table links to the post. Posts are read once; a streamer's first scan only reads posts from the last 7 days. Failures are reported once, after two consecutive failed reads. |
+| I-6 | **Community posts:** every 3 h, read each followed channel's Posts tab page (no API exists for posts). A new post with images, not members-only, whose text has a schedule word (schedule, this week, スケジュール, 予定…), four weekday names, or a short caption of 15 words or fewer (decision 24) is read like `/drop` (all its images as one schedule); its table links to the post. Posts are read once; a streamer's first scan only reads posts from the last 7 days. Failures are reported once, after two consecutive failed reads. |
 
 ### 5.3 Reading schedule images
 | ID | Requirement |
@@ -79,7 +79,7 @@ A single-user agent that **finds streams from YouTube waiting rooms and communit
 | X-4 | **Timezone:** only what's printed on the image, converted to my timezone; stored in UTC. If none is printed, the stream is tentative, placed provisionally in my timezone, until a waiting room or Edit's timezone dropdown sets it. |
 | X-5 | **Collabs:** for images, the reader's partner list; for waiting rooms, @handles following "Collab w/", "w/", "ft." or "コラボ" in the description, or names following "w/" in the title ("with" alone and "w/o" are not treated as collab markers). @handles are displayed as channel names. |
 | X-6 | Past streams (more than 3 h ago) are skipped; a stream already listed is not duplicated; a newer schedule moves an image-only stream only when its reading passes the checks. |
-| X-7 | **Tentative streams (decision 23):** shown in the table with ⏳ and the best reading; pickable, never added to my calendar unless I pick it (event titled "(tentative)"). Confirmed by a matching waiting room, a newer reading that passes the checks, the stream going live, or my Edit or Confirm. If the confirmed time differs, a 🔧 Fixed notice is posted even if it isn't picked. A tentative stream on my calendar still unconfirmed 3 h before it starts is asked about once in `#needs-review`. Images repeated within one post are read once. |
+| X-7 | **Tentative streams (decision 23):** shown in the table with ⏳ and the best reading; pickable, never added to my calendar unless I pick it (event titled "(tentative)"). Confirmed by a matching waiting room, a newer reading that passes the checks, the stream going live, or my Edit or Confirm. If the confirmed time differs, a 🔧 Fixed notice is posted even if it isn't picked. A tentative stream on my calendar still unconfirmed 3 h before it starts is asked about once in `#needs-review`. Images repeated within one post are read once; images over 4 MB are shrunk to a JPEG of at most 2560 px before reading, so `/drop` accepts up to Discord's 25 MB. |
 
 ### 5.4 Discord delivery
 Private server, single member (me). Channels:
@@ -210,6 +210,7 @@ All times use Discord timestamps, which render in each viewer's own timezone. Dr
 | 21 | Should short-notice streams count as surprises? | Yes: a waiting room that appears less than an hour before it starts pings in `#surprise-live` when it goes live, unless I picked it or it was on a schedule image (L-2c). Prompted by a stream whose waiting room opened about 20 minutes ahead and went live without a ping. (2026-10-15) |
 | 22 | How is the image reader evaluated, and what does it cost? | An on-demand exam against an answer key built from real schedule posts and checked against YouTube (§11). It runs the same model on the Gemini API free tier, so it costs $0; readings are saved, so re-scoring is free. (2026-10-16) |
 | 23 | What happens to uncertain readings instead of asking me? | They become **tentative**: shown in the table with ⏳ and the best reading, never added to my calendar unless I pick them (then titled "(tentative)"). A matching waiting room confirms or corrects them automatically, with a notice only if the time changed; my Edit also confirms them. I'm asked in `#needs-review` only if a tentative stream on my calendar is still unconfirmed a few hours before it starts. (2026-10-16) |
+| 24 | Which community posts are read? | Option A plus short captions: image posts with 15 words or fewer are read too. Vantacrow posts schedules with one-line jokes ("I'm your Huckleberry") and no schedule words, so option A skipped them. Short selfie or art posts cost a read each (about $0.02) and come back as "not a schedule". (2026-10-20) |
 
 ## 10. Notes
 

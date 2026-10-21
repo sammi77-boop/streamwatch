@@ -24,7 +24,7 @@ from .db import PAUSED_FOREVER, Database, Entry, Streamer
 from .collab import short_channel_name
 from .gcal import CalendarAuthError, CalendarError, GoogleCalendar, event_description, event_title
 from .parsing import CHANNEL_URL_EXAMPLE, parse_channel_url, parse_duration, suggest_timezones, valid_timezone
-from .pipeline import NeedsReview, NewImageEntry, process_image, unique_images
+from .pipeline import NeedsReview, NewImageEntry, process_image, shrink_image, unique_images
 from .tracker import (Cancelled, Event, LiveChanged, NewWaitingRoom, Rescheduled, SurpriseLive, Updated, WentLive,
                       apply_update)
 from . import community, digest, websub
@@ -39,7 +39,7 @@ POSTS_ALERT_AFTER = 2   # 3-hourly Posts-tab reads in a row before a streamer's 
 FIRST_SCAN_MAX_AGE = timedelta(days=7)   # when a streamer is new to post reading, only this week's posts count
 FEED_ALERT_AFTER = 4  # 15-minute feed checks in a row (an hour) before a streamer's feed problem is reported
 
-MAX_IMAGE_BYTES = 5 * 1024 * 1024  # Claude's per-image limit
+MAX_IMAGE_BYTES = 25 * 1024 * 1024  # Discord's upload limit; big images are shrunk before reading
 IMAGE_TYPES = {"image/png", "image/jpeg", "image/webp", "image/gif"}
 
 log = logging.getLogger("streamwatch")
@@ -337,7 +337,7 @@ class StreamWatch(discord.Client):
                          source_url: Optional[str] = None):
         """Run the pipeline on one schedule [(bytes, media_type, filename)] and post the results."""
         from . import ocr  # heavy imports, only when an image arrives
-        images = unique_images(images)
+        images = [(*shrink_image(data, mtype), name) for data, mtype, name in unique_images(images)]
         now = datetime.now(timezone.utc)
         if self.config.image_reader == "claude":
             from . import reader
@@ -475,7 +475,7 @@ class StreamWatch(discord.Client):
         return self.config.google_key_path.exists()
 
     async def read_posts_of(self, streamer: Streamer) -> int:
-        """New posts of one streamer: skip text without schedule words; read the rest like /drop. Returns how many."""
+        """New posts of one streamer: read image posts that look like schedules or have a short caption. Returns how many."""
         try:
             posts = await community.fetch_posts(self.http_session, streamer.channel_id)
         except (YouTubeError, aiohttp.ClientError, asyncio.TimeoutError, ValueError) as e:
@@ -496,7 +496,7 @@ class StreamWatch(discord.Client):
             if post.post_id in seen:
                 continue
             is_schedule = (bool(post.image_urls) and not post.members_only
-                           and community.looks_like_schedule(post.text))
+                           and community.worth_reading(post.text))
             age = community.post_age(post.published_text)
             recent = age is not None and age <= (FIRST_SCAN_MAX_AGE if first_scan else timedelta(days=14))
             self.db.mark_post_seen(post.post_id, streamer.id, is_schedule)
@@ -849,7 +849,7 @@ def register_commands(bot: StreamWatch) -> None:
                                                         ephemeral=True)
                 return
             if a.size > MAX_IMAGE_BYTES:
-                await interaction.response.send_message(f"`{a.filename}` is over 5 MB; try a smaller screenshot.",
+                await interaction.response.send_message(f"`{a.filename}` is over 25 MB; try a smaller screenshot.",
                                                         ephemeral=True)
                 return
         await interaction.response.defer(thinking=True)

@@ -60,6 +60,24 @@ class ImageResult:
         return "📅 Read the schedule" + note + ": " + ", ".join(parts) + "."
 
 
+MAX_IMAGE_BYTES = 4 * 1024 * 1024
+MAX_SIDE = 2560
+
+
+def shrink_image(data: bytes, media_type: str) -> tuple[bytes, str]:
+    """Very large images (e.g. a 15 MB PNG) can exceed the reader's request limit: re-encode them as a JPEG of at
+    most 2560 px, which keeps schedule text sharp. Smaller images are sent unchanged."""
+    if len(data) <= MAX_IMAGE_BYTES:
+        return data, media_type
+    import io
+    from PIL import Image
+    image = Image.open(io.BytesIO(data)).convert("RGB")
+    image.thumbnail((MAX_SIDE, MAX_SIDE))
+    out = io.BytesIO()
+    image.save(out, "JPEG", quality=90)
+    return out.getvalue(), "image/jpeg"
+
+
 def unique_images(images: list[tuple]) -> list[tuple]:
     """The Posts tab can list one picture twice (seen on every two-image post): read and show it once."""
     unique: dict[bytes, tuple] = {}

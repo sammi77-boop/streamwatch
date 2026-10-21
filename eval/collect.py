@@ -56,7 +56,7 @@ async def main() -> None:
                 print(f"skip {s['name']}: {e}")
                 continue
             picked = [p for p in posts if p.image_urls and not p.members_only
-                      and community.looks_like_schedule(p.text)
+                      and community.worth_reading(p.text)
                       and community.post_age(p.published_text) is not None][:PER_STREAMER]
             for post in picked:
                 folder = DATA / post.post_id

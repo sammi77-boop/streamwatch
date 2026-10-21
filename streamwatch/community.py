@@ -25,6 +25,8 @@ SCHEDULE_WORDS = re.compile(
     r"schedule|sched\b|timetable|this week|next week|week of|weekly|stream plan|"
     r"スケジュール|予定|今週|来週|週間|配信表|行程|時間表|直播表|班表",
     re.IGNORECASE)
+SHORT_CAPTION_WORDS = 15  # image posts with captions this short are read too: some streamers post schedules
+                          # with a one-line joke ("I'm your Huckleberry") and no schedule words (decision 24)
 _WEEKDAY = re.compile(r"\b(mon|tue|wed|thu|fri|sat|sun)[a-z]*\b|[月火水木金土日]曜", re.IGNORECASE)
 
 
@@ -42,6 +44,11 @@ def looks_like_schedule(text: str) -> bool:
     if SCHEDULE_WORDS.search(text):
         return True
     return len({m.group(0)[:3].lower() for m in _WEEKDAY.finditer(text)}) >= 4
+
+
+def worth_reading(text: str) -> bool:
+    """Send an image post to the reader: its caption looks like a schedule, or it's (almost) empty."""
+    return looks_like_schedule(text) or len(text.split()) <= SHORT_CAPTION_WORDS
 
 
 def _find(node, key: str, out: list) -> list:

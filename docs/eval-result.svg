@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 400" width="800" height="400" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif">
+  <title>StreamWatch image reader evaluation</title>
+  <rect width="800" height="400" fill="#FFFFFF"/>
+
+  <text x="60" y="62" font-size="15" fill="#888780">Evaluation · Oct 16, 2026 · Gemini 3.8 Flash</text>
+  <text x="60" y="96" font-size="22" font-weight="600" fill="#2C2C2A">22 schedule images · 122 streams</text>
+
+  <!-- Big number -->
+  <text x="60" y="200" font-size="84" font-weight="700" fill="#0F6E56">122/122</text>
+  <text x="62" y="234" font-size="17" fill="#444441">start times correct</text>
+
+  <!-- Breakdown -->
+  <g font-size="16">
+    <rect x="470" y="140" width="14" height="14" rx="3" fill="#1D9E75"/>
+    <text x="494" y="153" fill="#2C2C2A">Correct</text><text x="740" y="153" text-anchor="end" font-weight="600" fill="#2C2C2A">122</text>
+    <rect x="470" y="176" width="14" height="14" rx="3" fill="#D85A30"/>
+    <text x="494" y="189" fill="#2C2C2A">Silent errors</text><text x="740" y="189" text-anchor="end" font-weight="600" fill="#2C2C2A">0</text>
+    <rect x="470" y="212" width="14" height="14" rx="3" fill="#EF9F27"/>
+    <text x="494" y="225" fill="#2C2C2A">Flagged as tentative</text><text x="740" y="225" text-anchor="end" font-weight="600" fill="#2C2C2A">0</text>
+    <rect x="470" y="248" width="14" height="14" rx="3" fill="#B4B2A9"/>
+    <text x="494" y="261" fill="#2C2C2A">Missed</text><text x="740" y="261" text-anchor="end" font-weight="600" fill="#2C2C2A">0</text>
+  </g>
+
+  <!-- 100% bar -->
+  <rect x="60" y="292" width="680" height="18" rx="9" fill="#1D9E75"/>
+  <text x="60" y="336" font-size="14" fill="#888780">Answer key cross-checked with YouTube start times</text>
+  <text x="740" y="336" text-anchor="end" font-size="14" fill="#888780">Cost: $0 out of pocket</text>
+</svg>

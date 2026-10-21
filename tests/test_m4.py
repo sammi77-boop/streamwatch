@@ -319,6 +319,21 @@ class PipelineTest(unittest.IsolatedAsyncioTestCase):
                                      self.reader([wrong], [wrong]), None, "A", "B", NOW, NOW)
         self.assertTrue(result.events[0].entry.tentative)
 
+    def test_huge_images_are_shrunk_small_ones_kept(self):
+        import io
+        from PIL import Image
+        from streamwatch.pipeline import MAX_IMAGE_BYTES, shrink_image
+        noise = Image.effect_noise((3000, 2000), 100).convert("RGB")
+        buf = io.BytesIO()
+        noise.save(buf, "PNG")
+        big = buf.getvalue()
+        self.assertGreater(len(big), MAX_IMAGE_BYTES)
+        data, media_type = shrink_image(big, "image/png")
+        self.assertEqual(media_type, "image/jpeg")
+        self.assertLess(len(data), len(big))
+        self.assertLessEqual(max(Image.open(io.BytesIO(data)).size), 2560)
+        self.assertEqual(shrink_image(b"tiny", "image/png"), (b"tiny", "image/png"))
+
     def test_identical_images_are_read_once(self):
         from streamwatch.pipeline import unique_images
         images = [(b"same", "image/png", "post_1.png"), (b"same", "image/png", "post_2.png"), (b"other", "image/png", "x")]

@@ -7,7 +7,7 @@ import unittest
 from datetime import timedelta
 from pathlib import Path
 
-from streamwatch.community import full_size, looks_like_schedule, parse_posts, post_age
+from streamwatch.community import full_size, looks_like_schedule, parse_posts, post_age, worth_reading
 
 
 def page(posts):
@@ -37,6 +37,14 @@ class ParseTest(unittest.TestCase):
         self.assertTrue(looks_like_schedule("Mon: Minecraft\nTue: off\nWed: karaoke\nFri: collab"))
         self.assertFalse(looks_like_schedule("Its a me"))                                       # Vantacrow art
         self.assertFalse(looks_like_schedule("🎁久我レオ2026年誕生日グッズ🎁"))                    # Kuga merch
+
+    def test_short_captions_are_read_too(self):
+        # Vantacrow posts schedules with one-line jokes and no schedule words
+        self.assertTrue(worth_reading("I'm your Huckleberry"))
+        self.assertTrue(worth_reading("SORRY FOR JUST UPLOADING THIS HERE NOW RAHHHH"))
+        self.assertTrue(worth_reading(""))
+        long_letter = "Hey Crew, my life has been really hectic lately with lots of new responsibilities " * 2
+        self.assertFalse(worth_reading(long_letter))
         self.assertFalse(looks_like_schedule("See you Monday!"))
 
     def test_parse_posts(self):
@@ -95,12 +103,15 @@ class ReadPostsTest(unittest.IsolatedAsyncioTestCase):
     async def test_only_new_recent_schedule_posts_are_read_once(self):
         self.posts = parse_posts(page([
             post("new", "🕹️ Schedule for October 12th - 18th", 2, "2 days ago"),
-            post("art", "Its a me", 2, "3 days ago"),
+            post("short", "Its a me", 2, "3 days ago"),           # short caption: read too (decision 24)
+            post("letter", "Hey crew, life has been hectic lately with lots of new responsibilities, so streams "
+                           "will be lighter for a while, thank you all for understanding", 1, "4 days ago"),
             post("old", "Schedule for the week", 1, "9 days ago"),   # first scan: older than a week
             post("members", "Schedule (members)", 1, "1 day ago", members=True),
         ]))
-        self.assertEqual(await self.bot.read_posts_of(self.streamer), 1)
-        self.assertEqual(self.read, [("new", 2, "https://www.youtube.com/post/new")])
+        self.assertEqual(await self.bot.read_posts_of(self.streamer), 2)
+        self.assertEqual(self.read, [("short", 2, "https://www.youtube.com/post/short"),
+                                     ("new", 2, "https://www.youtube.com/post/new")])
         self.assertEqual(await self.bot.read_posts_of(self.streamer), 0)  # nothing is read twice
         # After the first scan, a newly posted schedule up to 2 weeks old is read
         self.posts = parse_posts(page([post("next", "Weekly schedule!", 1, "10 days ago")])) + self.posts
